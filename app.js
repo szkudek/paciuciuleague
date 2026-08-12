@@ -399,7 +399,7 @@ function render() {
       <div class="header-top">
         <div>
           <p class="eyebrow">Sezon ${new Date().getFullYear()} · Pstrągi</p>
-          <h1 class="h1 font-display">PACIUCIU League/h1>
+          <h1 class="h1 font-display">PACIUCIU League</h1>
         </div>
         <button class="icon-btn" onclick="App.toggleSettings()" aria-label="Ustawienia">${gearSvg()}</button>
       </div>
