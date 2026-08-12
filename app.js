@@ -1,5 +1,5 @@
 // ============================================
-// Wodery PACIUCIU i Pstrągi - logika aplikacji
+// PACIUCIU League - logika aplikacji
 // ============================================
 
 const CFG = window.APP_CONFIG || {};
@@ -275,7 +275,7 @@ function resetAllData() {
 function exportBackup() {
   const payload = {
     exportedAt: new Date().toISOString(),
-    app: "Wodery PACIUCIU i Pstrągi",
+    app: "PACIUCIU League",
     data: state.data,
   };
   const blob = new Blob([JSON.stringify(payload, null, 2)], { type: "application/json" });
@@ -399,7 +399,7 @@ function render() {
       <div class="header-top">
         <div>
           <p class="eyebrow">Sezon ${new Date().getFullYear()} · Pstrągi</p>
-          <h1 class="h1 font-display">Wodery PACIUCIU i Pstrągi</h1>
+          <h1 class="h1 font-display">PACIUCIU League/h1>
         </div>
         <button class="icon-btn" onclick="App.toggleSettings()" aria-label="Ustawienia">${gearSvg()}</button>
       </div>
