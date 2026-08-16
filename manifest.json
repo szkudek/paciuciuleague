@@ -1,6 +1,6 @@
 {
   "name": "Wodery PACIUCIU i Pstrągi",
-  "short_name": "Pstrągi",
+  "short_name": "PaciuciuLeague",
   "description": "Rywalizacja wędkarska - punktacja za złowione pstrągi",
   "start_url": "./index.html",
   "scope": "./",
