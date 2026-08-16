@@ -38,6 +38,9 @@ const state = {
   showSettings: false,
   showDateEdit: false,
   showResetConfirm: false,
+  showEndSeasonConfirm: false,
+  showManageTrips: false,
+  expandedArchive: {},
   showImportConfirm: false,
   pendingImportData: null,
   dateDraft: todayISO(),
@@ -160,10 +163,31 @@ function defaultData() {
   return {
     anglerNames: ["Kubulek", "Piotrunia"],
     personalBest: [0, 0],
+    seasonYear: new Date().getFullYear(),
     currentSessionDate: todayISO(),
     trips: [],
+    archivedSeasons: [],
     catches: [],
   };
+}
+
+// Liczy podsumowanie (punkty, liczba ryb, pula, zwycięzca) dla dowolnego zestawu danych sezonu -
+// używane zarówno dla bieżącego sezonu, jak i przy zamykaniu/przeglądaniu archiwum.
+function computeSeasonTotals(anglerNames, catches, trips) {
+  const perAngler = [0, 1].map((idx) => {
+    const list = catches.filter((c) => c.angler === idx);
+    const totalPoints = Math.round(list.reduce((s, c) => s + c.points, 0) * 10) / 10;
+    return { count: list.length, totalPoints };
+  });
+  const tripsCount = Array.isArray(trips) ? trips.length : 0;
+  const potAmount = tripsCount * 10;
+  const winner =
+    perAngler[0].totalPoints === perAngler[1].totalPoints
+      ? null
+      : perAngler[0].totalPoints > perAngler[1].totalPoints
+      ? 0
+      : 1;
+  return { perAngler, tripsCount, potAmount, winner };
 }
 
 // ---------- Firebase Firestore ----------
@@ -309,6 +333,11 @@ function startNewSession() {
   state.showDateEdit = false;
 }
 
+function removeTrip(date) {
+  const trips = (state.data.trips || []).filter((t) => t !== date);
+  persist({ ...state.data, trips });
+}
+
 // ---------- zdjęcia ryb ----------
 function compressImage(file) {
   return new Promise((resolve, reject) => {
@@ -452,6 +481,40 @@ function resetAllData() {
   state.showSettings = false;
 }
 
+function askEndSeason() {
+  state.showEndSeasonConfirm = true;
+  render();
+}
+
+function cancelEndSeason() {
+  state.showEndSeasonConfirm = false;
+  render();
+}
+
+function endSeason() {
+  const d = state.data;
+  const archived = {
+    year: d.seasonYear || new Date().getFullYear(),
+    endedAt: new Date().toISOString(),
+    anglerNames: d.anglerNames,
+    trips: d.trips || [],
+    catches: d.catches,
+  };
+  const nextData = {
+    ...d,
+    seasonYear: (d.seasonYear || new Date().getFullYear()) + 1,
+    currentSessionDate: todayISO(),
+    trips: [],
+    catches: [],
+    archivedSeasons: [...(d.archivedSeasons || []), archived],
+    // personalBest i anglerNames NIE resetujemy - to rekordy życiowe, niezależne od sezonu
+  };
+  persist(nextData);
+  state.showEndSeasonConfirm = false;
+  state.showSettings = false;
+  state.expandedArchive = {};
+}
+
 function exportBackup() {
   const payload = {
     exportedAt: new Date().toISOString(),
@@ -537,7 +600,7 @@ function esc(s) {
   return d.innerHTML;
 }
 
-function catchRowHtml(c, name, isLast) {
+function catchRowHtml(c, name, isLast, readonly) {
   const extraBits = [c.species, c.location].filter(Boolean).join(" · ");
   return `
     <div class="catch-row" style="${isLast ? "border-bottom:none;" : ""}">
@@ -553,7 +616,7 @@ function catchRowHtml(c, name, isLast) {
           ${extraBits ? `<p class="catch-extra">${esc(extraBits)}</p>` : ""}
         </div>
       </div>
-      <button class="del-btn" onclick="App.deleteCatch('${c.id}')" aria-label="Usuń">✕</button>
+      ${readonly ? "" : `<button class="del-btn" onclick="App.deleteCatch('${c.id}')" aria-label="Usuń">✕</button>`}
     </div>`;
 }
 
@@ -591,7 +654,7 @@ function render() {
       <div class="header-fish-bg">${fishSvg(140, "#fff")}</div>
       <div class="header-top">
         <div>
-          <p class="eyebrow">Sezon ${new Date().getFullYear()} · Pstrągi</p>
+          <p class="eyebrow">Sezon ${d.seasonYear || new Date().getFullYear()} · Pstrągi</p>
           <h1 class="h1 font-display">Wodery PACIUCIU i Pstrągi</h1>
         </div>
         <div class="header-actions">
@@ -812,6 +875,73 @@ function render() {
                .join("")}`
           : `<div class="empty-state">${fishSvg(28, "#DDE6E2")}<p style="margin:8px 0 0;">Brak złowionych ryb. Zmierzcie pierwszą i dodajcie ją powyżej.</p></div>`
       }
+
+      ${
+        d.archivedSeasons && d.archivedSeasons.length > 0
+          ? `<p class="section-title">${archiveSvg()} Poprzednie sezony</p>
+             ${d.archivedSeasons
+               .slice()
+               .sort((a, b) => b.year - a.year)
+               .map((season) => {
+                 const summary = computeSeasonTotals(season.anglerNames, season.catches, season.trips);
+                 const open = !!state.expandedArchive[season.year];
+                 const seasonByDate = {};
+                 season.catches.forEach((c) => {
+                   seasonByDate[c.date] = seasonByDate[c.date] || [];
+                   seasonByDate[c.date].push(c);
+                 });
+                 const seasonDates = Object.keys(seasonByDate).sort((a, b) => (a < b ? 1 : -1));
+                 return `
+                   <div class="history-item">
+                     <button class="history-head" onclick="App.toggleArchive(${season.year})">
+                       <span class="history-date">Sezon ${season.year}</span>
+                       <span style="display:flex;align-items:center;gap:10px;">
+                         <span class="history-summary">${
+                           summary.winner === null
+                             ? "remis"
+                             : "🏆 " + esc(season.anglerNames[summary.winner])
+                         } · ${summary.potAmount} zł</span>
+                         ${open ? chevronUpSvg() : chevronDownSvg()}
+                       </span>
+                     </button>
+                     ${
+                       open
+                         ? `<div class="history-body" style="padding:14px 16px;">
+                             <div class="leaderboard" style="margin-bottom:14px;">
+                               ${season.anglerNames
+                                 .map((name, idx) => {
+                                   const s = summary.perAngler[idx];
+                                   const isW = summary.winner === idx;
+                                   return `
+                                     <div class="lb-card ${isW ? "leader" : "plain"}">
+                                       ${isW ? `<div class="trophy-badge">${trophySvg(16, "#C97A3D")}</div>` : ""}
+                                       <p class="lb-name">${esc(name)}</p>
+                                       <p class="lb-points font-mono">${s.totalPoints.toFixed(1)}</p>
+                                       <p class="lb-sub">${s.count} ${plFish(s.count)}</p>
+                                     </div>`;
+                                 })
+                                 .join("")}
+                             </div>
+                             ${seasonDates
+                               .map(
+                                 (date) => `
+                               <p style="font-family:'JetBrains Mono',monospace;font-size:12px;font-weight:600;color:var(--text-muted);margin:10px 0 4px;">${formatDatePL(date)}</p>
+                               ${seasonByDate[date]
+                                 .slice()
+                                 .sort((a, b) => (a.time < b.time ? 1 : -1))
+                                 .map((c, i, arr) => catchRowHtml(c, season.anglerNames[c.angler], i === arr.length - 1, true))
+                                 .join("")}
+                             `
+                               )
+                               .join("")}
+                           </div>`
+                         : ""
+                     }
+                   </div>`;
+               })
+               .join("")}`
+          : ""
+      }
       <div class="footer-space"></div>
     </div>
 
@@ -825,7 +955,7 @@ function render() {
                 <div class="modal-head">
                   <p class="font-display modal-danger-title" style="font-size:18px;margin:0;">Na pewno wyczyścić dane?</p>
                 </div>
-                <p class="modal-danger-text">To usunie WSZYSTKIE zapisane ryby i wyniki obu zawodników. Tej operacji nie da się cofnąć. Rozważ wcześniej pobranie kopii zapasowej.</p>
+                <p class="modal-danger-text">To usunie WSZYSTKIE zapisane ryby i wyniki obu zawodników, włącznie z archiwum poprzednich sezonów. Tej operacji nie da się cofnąć. Rozważ wcześniej pobranie kopii zapasowej.</p>
                 <button class="btn-danger" onclick="App.resetData()">Tak, wyczyść wszystko</button>
                 <button class="btn-secondary" onclick="App.cancelReset()">Anuluj</button>
               `
@@ -840,6 +970,51 @@ function render() {
                 <button class="btn-danger" onclick="App.confirmImport()">Tak, przywróć z pliku</button>
                 <button class="btn-secondary" onclick="App.cancelImport()">Anuluj</button>
               `
+                  : state.showEndSeasonConfirm
+                  ? (() => {
+                      const summary = computeSeasonTotals(d.anglerNames, d.catches, d.trips);
+                      const totalFish = summary.perAngler[0].count + summary.perAngler[1].count;
+                      return `
+                <div class="modal-head">
+                  <p class="font-display" style="font-size:18px;margin:0;">Zakończyć sezon ${d.seasonYear}?</p>
+                </div>
+                <p class="modal-danger-text" style="color:var(--text-muted);">
+                  ${esc(d.anglerNames[0])}: ${summary.perAngler[0].totalPoints.toFixed(1)} pkt (${summary.perAngler[0].count} ${plFish(summary.perAngler[0].count)})<br/>
+                  ${esc(d.anglerNames[1])}: ${summary.perAngler[1].totalPoints.toFixed(1)} pkt (${summary.perAngler[1].count} ${plFish(summary.perAngler[1].count)})<br/>
+                  Pula: ${summary.potAmount} zł ${summary.winner === null ? "(remis)" : "→ zgarnia " + esc(d.anglerNames[summary.winner])}
+                </p>
+                <p class="modal-danger-text">Ten sezon trafi do archiwum (zostanie w historii), a wynik i pula wyzerują się na start sezonu ${d.seasonYear + 1}. Personal Best zostaje bez zmian - to rekord życiowy. ${totalFish === 0 ? "Uwaga: w tym sezonie nie ma jeszcze żadnych złowionych ryb." : ""}</p>
+                <button class="btn-copper" style="width:100%;" onclick="App.endSeason()">Tak, zakończ sezon ${d.seasonYear}</button>
+                <button class="btn-secondary" onclick="App.cancelEndSeason()">Anuluj</button>
+              `;
+                    })()
+                  : state.showManageTrips
+                  ? `
+                <div class="modal-head">
+                  <p class="font-display" style="font-size:18px;margin:0;">Wyjazdy (pula ${d.seasonYear})</p>
+                  <button onclick="App.closeManageTrips()" style="background:none;border:none;cursor:pointer;">${xSvg()}</button>
+                </div>
+                <p style="font-size:13px;color:var(--text-muted);margin:0 0 12px;">Każdy wyjazd to 10 zł do puli. Usunięcie wyjazdu nie kasuje złowionych tego dnia ryb - tylko odejmuje 10 zł z puli.</p>
+                ${
+                  (d.trips || []).length === 0
+                    ? `<p style="font-size:13px;color:var(--text-muted);">Brak zapisanych wyjazdów w tym sezonie.</p>`
+                    : `<div class="catch-list" style="margin-bottom:8px;">
+                        ${(d.trips || [])
+                          .slice()
+                          .sort((a, b) => (a < b ? 1 : -1))
+                          .map(
+                            (date, i, arr) => `
+                          <div class="catch-row" style="${i === arr.length - 1 ? "border-bottom:none;" : ""}">
+                            <p class="catch-name" style="font-family:'JetBrains Mono',monospace;">${formatDatePL(date)}</p>
+                            <button class="del-btn" onclick="App.removeTrip('${date}')" aria-label="Usuń wyjazd">✕</button>
+                          </div>`
+                          )
+                          .join("")}
+                      </div>`
+                }
+                <p style="font-size:13px;color:var(--text-muted);margin:8px 0 0;">Aktualna pula: <b style="color:var(--accent);">${stats.potAmount} zł</b> (${stats.tripsCount} ${plTrip(stats.tripsCount)})</p>
+                <button class="btn-secondary" style="margin-top:12px;" onclick="App.closeManageTrips()">Zamknij</button>
+              `
                   : `
                 <div class="modal-head">
                   <p class="font-display" style="font-size:18px;margin:0;">Ustawienia</p>
@@ -851,11 +1026,15 @@ function render() {
                 <button class="btn-copper" style="width:100%;margin-top:4px;" onclick="App.saveNames()">Zapisz imiona</button>
 
                 <label class="length-label">Kopia zapasowa</label>
-                <button class="btn-secondary" style="margin-top:8px;color:var(--spruce);border-color:var(--line);" onclick="App.exportBackup()">⬇ Pobierz kopię zapasową (.json)</button>
-                <label class="btn-secondary" style="margin-top:8px;display:block;text-align:center;color:var(--spruce);border-color:var(--line);cursor:pointer;">
+                <button class="btn-secondary" style="margin-top:8px;color:var(--text);border-color:var(--border);" onclick="App.exportBackup()">⬇ Pobierz kopię zapasową (.json)</button>
+                <label class="btn-secondary" style="margin-top:8px;display:block;text-align:center;color:var(--text);border-color:var(--border);cursor:pointer;">
                   ⬆ Przywróć z pliku…
                   <input type="file" accept="application/json" style="display:none;" onchange="App.importFile(this)" />
                 </label>
+
+                <label class="length-label">Sezon</label>
+                <button class="btn-secondary" style="margin-top:8px;color:var(--text);border-color:var(--border);" onclick="App.openManageTrips()">💰 Zarządzaj wyjazdami (pula: ${stats.potAmount} zł)</button>
+                <button class="btn-secondary" style="margin-top:8px;color:var(--text);border-color:var(--border);" onclick="App.askEndSeason()">🏁 Zakończ sezon ${d.seasonYear} i rozpocznij nowy</button>
 
                 <button class="btn-secondary" style="border-color:#E8B9A6;color:#B14A2C;margin-top:20px;" onclick="App.askReset()">Wyczyść wszystkie dane</button>
               `
@@ -926,6 +1105,9 @@ function plusSvg() {
 }
 function trophySvg(size = 18, color = "#C97A3D") {
   return `<svg width="${size}" height="${size}" viewBox="0 0 24 24" fill="none" stroke="${color}" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:-3px;"><path d="M8 21h8M12 17v4M7 4h10v5a5 5 0 0 1-10 0V4Z"/><path d="M7 5H4a1 1 0 0 0-1 1v1a4 4 0 0 0 4 4M17 5h3a1 1 0 0 1 1 1v1a4 4 0 0 1-4 4"/></svg>`;
+}
+function archiveSvg(size = 17, color = "#C97A3D") {
+  return `<svg width="${size}" height="${size}" viewBox="0 0 24 24" fill="none" stroke="${color}" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:-3px;"><rect x="3" y="4" width="18" height="5" rx="1"/><path d="M5 9v9a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V9M10 13h4"/></svg>`;
 }
 function coinsSvg(size = 15, color = "#C97A3D") {
   return `<svg width="${size}" height="${size}" viewBox="0 0 24 24" fill="none" stroke="${color}" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:-2px;"><circle cx="8" cy="8" r="6"/><path d="M18.09 10.37A6 6 0 1 1 10.34 18"/><path d="M7 6h1v4"/><path d="m16.71 13.88.7.71-2.82 2.82"/></svg>`;
@@ -1009,12 +1191,16 @@ window.App = {
   toggleSettings() {
     state.showSettings = !state.showSettings;
     state.showResetConfirm = false;
+    state.showEndSeasonConfirm = false;
+    state.showManageTrips = false;
     render();
   },
   closeSettingsBackdrop(e) {
     if (e.target.classList.contains("modal-backdrop")) {
       state.showSettings = false;
       state.showResetConfirm = false;
+      state.showEndSeasonConfirm = false;
+      state.showManageTrips = false;
       render();
     }
   },
@@ -1066,6 +1252,22 @@ window.App = {
     render();
   },
   resetData: guardedAction(resetAllData),
+  askEndSeason,
+  cancelEndSeason,
+  endSeason: guardedAction(endSeason),
+  toggleArchive(year) {
+    state.expandedArchive[year] = !state.expandedArchive[year];
+    render();
+  },
+  openManageTrips() {
+    state.showManageTrips = true;
+    render();
+  },
+  closeManageTrips() {
+    state.showManageTrips = false;
+    render();
+  },
+  removeTrip: guardedAction(removeTrip),
   submitPassword,
   cancelPassword,
   passwordKeydown(e) {
