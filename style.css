@@ -166,6 +166,56 @@ body {
   margin-top: 20px;
 }
 
+.add-fish-trigger {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  margin-top: 20px;
+  padding: 16px;
+  border-radius: 16px;
+  border: none;
+  background: var(--accent);
+  color: #fff;
+  font-size: 16px;
+  font-weight: 700;
+  font-family: 'Inter', sans-serif;
+  cursor: pointer;
+  box-shadow: 0 2px 6px rgba(0,0,0,0.12);
+}
+.add-fish-trigger:hover { filter: brightness(1.05); }
+.add-fish-trigger:active { transform: scale(0.99); }
+
+.add-fish-card {
+  animation: slideDown 0.22s ease;
+  transform-origin: top center;
+  overflow: hidden;
+}
+@keyframes slideDown {
+  from { opacity: 0; transform: scaleY(0.92) translateY(-6px); }
+  to { opacity: 1; transform: scaleY(1) translateY(0); }
+}
+
+.add-fish-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+.collapse-btn {
+  background: var(--bg);
+  border: none;
+  border-radius: 999px;
+  width: 30px;
+  height: 30px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  flex-shrink: 0;
+}
+.collapse-btn:hover { background: var(--border); }
+
 .error-box {
   margin: 16px 20px 0;
   background: var(--error-bg);
@@ -625,16 +675,22 @@ body {
 
 .footer-space { height: 64px; }
 
+.photo-picker-row {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+  margin-top: 6px;
+}
 .photo-picker-btn {
   display: flex;
   align-items: center;
-  gap: 8px;
-  margin-top: 6px;
-  padding: 12px;
+  gap: 6px;
+  margin-top: 0;
+  padding: 12px 8px;
   border-radius: 12px;
   border: 2px dashed var(--border);
   color: var(--text-muted);
-  font-size: 14px;
+  font-size: 13px;
   font-weight: 500;
   cursor: pointer;
   justify-content: center;

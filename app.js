@@ -33,6 +33,7 @@ const state = {
   pendingAction: null,
   selectedAngler: 0,
   lengthInput: "",
+  showAddForm: false,
   speciesInput: "",
   locationInput: "",
   showSettings: false,
@@ -445,6 +446,7 @@ async function addCatch() {
   state.speciesInput = "";
   state.locationInput = "";
   state.pendingPhoto = null;
+  state.showAddForm = false;
 }
 
 function deleteCatch(id) {
@@ -691,8 +693,16 @@ function render() {
     </div>
 
     <div class="container">
-      <div class="card">
-        <p class="font-display" style="font-size:18px;margin:0;">Zapisz złowioną rybę</p>
+      ${
+        !state.showAddForm
+          ? `<button class="add-fish-trigger" onclick="App.toggleAddForm()">
+              ${plusSvg()} Zapisz złowioną rybę
+            </button>`
+          : `<div class="card add-fish-card">
+        <div class="add-fish-header">
+          <p class="font-display" style="font-size:18px;margin:0;">Zapisz złowioną rybę</p>
+          <button class="collapse-btn" onclick="App.toggleAddForm()" aria-label="Zwiń">${chevronUpSvg()}</button>
+        </div>
         <div class="angler-toggle">
           ${d.anglerNames
             .map(
@@ -755,10 +765,16 @@ function render() {
                 <img src="${state.pendingPhoto}" class="photo-thumb" onclick="App.openLightbox('${state.pendingPhoto}')" />
                 <button class="photo-remove-btn" onclick="App.removePendingPhoto()">${xSvgSmall()} Usuń zdjęcie</button>
               </div>`
-            : `<label class="photo-picker-btn">
-                ${cameraSvg()} Dodaj zdjęcie ryby
-                <input type="file" accept="image/*" style="display:none;" onchange="App.handlePhotoSelect(this)" />
-              </label>`
+            : `<div class="photo-picker-row">
+                <label class="photo-picker-btn">
+                  ${cameraSvg()} Zrób zdjęcie
+                  <input type="file" accept="image/*" capture="environment" style="display:none;" onchange="App.handlePhotoSelect(this)" />
+                </label>
+                <label class="photo-picker-btn">
+                  ${galleryImgSvg()} Z galerii
+                  <input type="file" accept="image/*" style="display:none;" onchange="App.handlePhotoSelect(this)" />
+                </label>
+              </div>`
         }
 
         <div class="add-row">
@@ -767,11 +783,12 @@ function render() {
             ${state.uploadingPhoto ? "Wysyłanie zdjęcia…" : `${plusSvg()} Dodaj rybę`}
           </button>
         </div>
-      </div>
+      </div>`
+      }
 
       ${
         stats.todays.length > 0
-          ? `<p class="section-title">Dziś złowione (${formatDatePL(d.currentSessionDate)})</p>
+          ? `<p class="section-title">Wyjazd (${formatDatePL(d.currentSessionDate)})</p>
              <div class="catch-list">
                ${stats.todays
                  .slice()
@@ -1133,6 +1150,9 @@ function xSvgSmall() {
 function cameraSvg() {
   return `<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#5B7280" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:-3px;"><path d="M14.5 4h-5L7 7H4a2 2 0 0 0-2 2v9a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2V9a2 2 0 0 0-2-2h-3l-2.5-3Z"/><circle cx="12" cy="13" r="3.5"/></svg>`;
 }
+function galleryImgSvg() {
+  return `<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#5B7280" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:-3px;"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="9" cy="9" r="2"/><path d="m21 15-5-5L5 21"/></svg>`;
+}
 function xSvgWhite() {
   return `<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 6 6 18M6 6l12 12"/></svg>`;
 }
@@ -1142,6 +1162,10 @@ function xSvg() {
 
 // ---------- API wystawione do onclick ----------
 window.App = {
+  toggleAddForm() {
+    state.showAddForm = !state.showAddForm;
+    render();
+  },
   selectAngler(idx) {
     state.selectedAngler = idx;
     render();
