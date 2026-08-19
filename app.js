@@ -1,5 +1,5 @@
 // ============================================
-// Wodery PACIUCIU i Pstrągi - logika aplikacji
+// PACIUCIU LEAGUE - logika aplikacji
 // ============================================
 
 const CFG = window.APP_CONFIG || {};
@@ -50,6 +50,7 @@ const state = {
   pendingPhoto: null,
   uploadingPhoto: false,
   lightboxUrl: null,
+  confirmDeleteId: null,
 };
 
 function getInitialTheme() {
@@ -234,6 +235,7 @@ async function loadInitial() {
     render();
     return;
   }
+  let needsDateSync = false;
   try {
     const record = await fetchRemote();
     if (record && record.anglerNames) {
@@ -259,9 +261,20 @@ async function loadInitial() {
       state.error = "Nie udało się połączyć z bazą danych i brak lokalnej kopii zapasowej na tym telefonie.";
     }
   } finally {
+    // Pole "Dzień połowów" ma zawsze pokazywać RZECZYWISTĄ dzisiejszą datę przy otwarciu apki,
+    // żeby nowe ryby nie zapisywały się pod nieaktualnym dniem. To NIE dolicza wyjazdu do puli -
+    // to nadal wymaga świadomego kliknięcia "zmień" → "Ustaw" (żeby nie doliczać 10 zł za samo
+    // zerknięcie do wyniku, gdy nikt nie wyszedł na ryby).
+    if (state.data && state.data.currentSessionDate !== todayISO()) {
+      state.data.currentSessionDate = todayISO();
+      needsDateSync = true;
+    }
     state.loading = false;
     render();
     startRealtimeSync();
+    if (needsDateSync) {
+      persist(state.data);
+    }
   }
 }
 
@@ -451,6 +464,7 @@ async function addCatch() {
 
 function deleteCatch(id) {
   persist({ ...state.data, catches: state.data.catches.filter((c) => c.id !== id) });
+  state.confirmDeleteId = null;
 }
 
 function startEditPB(idx) {
@@ -520,7 +534,7 @@ function endSeason() {
 function exportBackup() {
   const payload = {
     exportedAt: new Date().toISOString(),
-    app: "Wodery PACIUCIU i Pstrągi",
+    app: "PACIUCIU LEAGUE",
     data: state.data,
   };
   const blob = new Blob([JSON.stringify(payload, null, 2)], { type: "application/json" });
@@ -592,7 +606,8 @@ function computeStats() {
   const dates = Object.keys(byDate).sort((a, b) => (a < b ? 1 : -1));
   const tripsCount = Array.isArray(d.trips) ? d.trips.length : 0;
   const potAmount = tripsCount * 10;
-  return { perAngler, todays, byDate, dates, tripsCount, potAmount };
+  const biggestCatch = d.catches.reduce((m, c) => (!m || c.length > m.length ? c : m), null);
+  return { perAngler, todays, byDate, dates, tripsCount, potAmount, biggestCatch };
 }
 
 // ---------- render helpers ----------
@@ -604,6 +619,19 @@ function esc(s) {
 
 function catchRowHtml(c, name, isLast, readonly) {
   const extraBits = [c.species, c.location].filter(Boolean).join(" · ");
+  const confirming = !readonly && state.confirmDeleteId === c.id;
+
+  if (confirming) {
+    return `
+    <div class="catch-row confirm-row" style="${isLast ? "border-bottom:none;" : ""}">
+      <p class="confirm-text">Usunąć ${c.length} cm (${esc(name)})?</p>
+      <div class="confirm-actions">
+        <button class="confirm-btn-yes" onclick="App.deleteCatch('${c.id}')">Usuń</button>
+        <button class="confirm-btn-no" onclick="App.cancelDeleteCatch()">Anuluj</button>
+      </div>
+    </div>`;
+  }
+
   return `
     <div class="catch-row" style="${isLast ? "border-bottom:none;" : ""}">
       <div class="catch-row-main">
@@ -618,7 +646,7 @@ function catchRowHtml(c, name, isLast, readonly) {
           ${extraBits ? `<p class="catch-extra">${esc(extraBits)}</p>` : ""}
         </div>
       </div>
-      ${readonly ? "" : `<button class="del-btn" onclick="App.deleteCatch('${c.id}')" aria-label="Usuń">✕</button>`}
+      ${readonly ? "" : `<button class="del-btn" onclick="App.askDeleteCatch('${c.id}')" aria-label="Usuń">✕</button>`}
     </div>`;
 }
 
@@ -657,7 +685,7 @@ function render() {
       <div class="header-top">
         <div>
           <p class="eyebrow">Sezon ${d.seasonYear || new Date().getFullYear()} · Pstrągi</p>
-          <h1 class="h1 font-display">Wodery PACIUCIU i Pstrągi</h1>
+          <h1 class="h1 font-display">PACIUCIU LEAGUE</h1>
         </div>
         <div class="header-actions">
           <button class="icon-btn" onclick="App.toggleTheme()" aria-label="Zmień motyw">${state.theme === "dark" ? sunSvg() : moonSvg()}</button>
@@ -693,6 +721,21 @@ function render() {
     </div>
 
     <div class="container">
+      <div class="pot-card">
+        <div>
+          <p class="pot-label">${coinsSvg()} Pula sezonu</p>
+          <p class="pot-amount font-mono">${stats.potAmount} zł</p>
+          <p class="pot-sub">${stats.tripsCount} ${plTrip(stats.tripsCount)} × 10 zł</p>
+        </div>
+        <div class="pot-winner">
+          ${
+            leader === null
+              ? `<p class="pot-winner-label">Remis</p>`
+              : `<p class="pot-winner-label">Aktualnie zgarnia</p><p class="pot-winner-name">${esc(d.anglerNames[leader])}</p>`
+          }
+        </div>
+      </div>
+
       ${
         !state.showAddForm
           ? `<button class="add-fish-trigger" onclick="App.toggleAddForm()">
@@ -816,20 +859,28 @@ function render() {
           .join("")}
       </div>
 
-      <div class="pot-card">
-        <div>
-          <p class="pot-label">${coinsSvg()} Pula sezonu</p>
-          <p class="pot-amount font-mono">${stats.potAmount} zł</p>
-          <p class="pot-sub">${stats.tripsCount} ${plTrip(stats.tripsCount)} × 10 zł</p>
-        </div>
-        <div class="pot-winner">
-          ${
-            leader === null
-              ? `<p class="pot-winner-label">Remis</p>`
-              : `<p class="pot-winner-label">Aktualnie zgarnia</p><p class="pot-winner-name">${esc(d.anglerNames[leader])}</p>`
-          }
-        </div>
-      </div>
+      ${
+        stats.biggestCatch
+          ? `<div class="big-fish-card">
+              <p class="big-fish-label">${trophySvg(14, "#fff")} Największa ryba sezonu</p>
+              <div class="big-fish-body">
+                ${
+                  stats.biggestCatch.photoUrl
+                    ? `<img src="${stats.biggestCatch.photoUrl}" class="big-fish-photo" onclick="App.openLightbox('${stats.biggestCatch.photoUrl}')" />`
+                    : `<div class="big-fish-photo big-fish-photo-placeholder">${fishSvg(36, "#fff")}</div>`
+                }
+                <div class="big-fish-info">
+                  <p class="big-fish-length font-mono">${stats.biggestCatch.length} cm</p>
+                  <p class="big-fish-angler">${esc(d.anglerNames[stats.biggestCatch.angler])}</p>
+                  <p class="big-fish-meta">
+                    ${[stats.biggestCatch.species, stats.biggestCatch.location].filter(Boolean).join(" · ") || "&nbsp;"}
+                  </p>
+                  <p class="big-fish-date">${formatDatePL(stats.biggestCatch.date)}</p>
+                </div>
+              </div>
+            </div>`
+          : ""
+      }
 
       <p class="section-title">${rulerSvg()} Personal Best</p>
       <div class="pb-grid">
@@ -1187,6 +1238,14 @@ window.App = {
   },
   addCatch: guardedAction(addCatch),
   deleteCatch: guardedAction(deleteCatch),
+  askDeleteCatch(id) {
+    state.confirmDeleteId = id;
+    render();
+  },
+  cancelDeleteCatch() {
+    state.confirmDeleteId = null;
+    render();
+  },
   startEditPB(idx) {
     // odczyt wartości nie jest tu potrzebny - to tylko wejście w tryb edycji
     guardedAction(() => startEditPB(idx))();

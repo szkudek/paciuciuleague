@@ -1,5 +1,5 @@
 const CACHE_NAME = "pstragi-cache-v1";
-const CORE_FILES = ["./", "./index.html", "./style.css", "./app.js", "./config.js", "./manifest.json"];
+const CORE_FILES = ["./", "./index.html", "./style.css", "./app.js", "./config.js", "./manifest.json", "./header-bg.jpg", "./icon-192.png", "./icon-512.png"];
 
 self.addEventListener("install", (event) => {
   event.waitUntil(
