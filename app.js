@@ -49,6 +49,7 @@ const state = {
   editingPB: null,
   pendingPhoto: null,
   uploadingPhoto: false,
+  uploadingGalleryPhoto: false,
   lightboxUrl: null,
   confirmDeleteId: null,
   profileAnglerIdx: null,
@@ -170,6 +171,7 @@ function defaultData() {
     seasonYear: new Date().getFullYear(),
     currentSessionDate: todayISO(),
     trips: [],
+    galleryPhotos: [],
     archivedSeasons: [],
     catches: [],
   };
@@ -509,6 +511,54 @@ async function uploadToImgbb(dataUrl) {
   const json = await res.json();
   if (!json.success) throw new Error("imgbb zwróciło błąd");
   return json.data.url;
+}
+
+// ---------- galeria zdjęć znad wody ----------
+async function handleGalleryPhotoSelect(file) {
+  if (!file) return;
+  if (!file.type.startsWith("image/")) {
+    state.error = "Wybrany plik nie jest zdjęciem.";
+    render();
+    return;
+  }
+  if (!IMGBB_API_KEY) {
+    state.error = "Zdjęcia w galerii wymagają klucza imgbb w config.js (patrz README).";
+    render();
+    return;
+  }
+  try {
+    const compressed = await compressImage(file);
+    state.uploadingGalleryPhoto = true;
+    render();
+
+    let photoUrl = null;
+    try {
+      photoUrl = await uploadToImgbb(compressed);
+    } catch (e) {
+      state.error = "Nie udało się wysłać zdjęcia do galerii.";
+    }
+
+    state.uploadingGalleryPhoto = false;
+
+    if (photoUrl) {
+      const entry = {
+        id: `${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+        url: photoUrl,
+        date: todayISO(),
+      };
+      persist({ ...state.data, galleryPhotos: [...(state.data.galleryPhotos || []), entry] });
+    } else {
+      render();
+    }
+  } catch (e) {
+    state.uploadingGalleryPhoto = false;
+    state.error = "Nie udało się przetworzyć zdjęcia. Spróbuj innego pliku.";
+    render();
+  }
+}
+
+function deleteGalleryPhoto(id) {
+  persist({ ...state.data, galleryPhotos: (state.data.galleryPhotos || []).filter((p) => p.id !== id) });
 }
 
 async function addCatch() {
@@ -1108,6 +1158,37 @@ function render() {
                .join("")}`
           : ""
       }
+
+      <p class="section-title">${imageSvg()} Galeria znad wody</p>
+      <div class="gallery-add-row">
+        <label class="photo-picker-btn">
+          ${cameraSvg()} Zrób zdjęcie
+          <input type="file" accept="image/*" capture="environment" style="display:none;" onchange="App.handleGalleryPhotoSelect(this)" />
+        </label>
+        <label class="photo-picker-btn">
+          ${galleryImgSvg()} Z galerii
+          <input type="file" accept="image/*" style="display:none;" onchange="App.handleGalleryPhotoSelect(this)" />
+        </label>
+      </div>
+      ${state.uploadingGalleryPhoto ? `<p style="font-size:12px;color:var(--text-muted);margin:8px 0 0;">Wysyłanie zdjęcia…</p>` : ""}
+      ${
+        (d.galleryPhotos || []).length > 0
+          ? `<div class="gallery-grid">
+              ${(d.galleryPhotos || [])
+                .slice()
+                .sort((a, b) => (a.date < b.date ? 1 : -1))
+                .map(
+                  (p) => `
+                <div class="gallery-item">
+                  <img src="${p.url}" class="gallery-thumb" onclick="App.openLightbox('${p.url}')" />
+                  <button class="gallery-del-btn" onclick="App.deleteGalleryPhoto('${p.id}')" aria-label="Usuń">✕</button>
+                </div>`
+                )
+                .join("")}
+            </div>`
+          : `<p style="font-size:13px;color:var(--text-muted);margin:10px 0 0;">Brak zdjęć - dodajcie pierwsze z Waszych wypraw.</p>`
+      }
+
       <div class="footer-space"></div>
     </div>
 
@@ -1385,6 +1466,9 @@ function cameraSvg() {
 function galleryImgSvg() {
   return `<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#5B7280" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:-3px;"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="9" cy="9" r="2"/><path d="m21 15-5-5L5 21"/></svg>`;
 }
+function imageSvg(size = 17, color = "#C97A3D") {
+  return `<svg width="${size}" height="${size}" viewBox="0 0 24 24" fill="none" stroke="${color}" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:-3px;"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="9" cy="9" r="2"/><path d="m21 15-5-5L5 21"/></svg>`;
+}
 function xSvgWhite() {
   return `<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 6 6 18M6 6l12 12"/></svg>`;
 }
@@ -1464,6 +1548,13 @@ window.App = {
     state.showAllAchievements = !state.showAllAchievements;
     render();
   },
+  handleGalleryPhotoSelect(input) {
+    const file = input.files && input.files[0];
+    input.value = "";
+    if (!file) return;
+    guardedAction(() => handleGalleryPhotoSelect(file))();
+  },
+  deleteGalleryPhoto: guardedAction(deleteGalleryPhoto),
   toggleTheme() {
     state.theme = state.theme === "dark" ? "light" : "dark";
     try {
