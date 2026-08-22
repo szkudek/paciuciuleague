@@ -771,7 +771,6 @@ function render() {
 
   root.innerHTML = `
     <div class="header">
-      <div class="header-fish-bg">${fishSvg(140, "#fff")}</div>
       <div class="header-top">
         <div>
           <p class="eyebrow">Sezon ${d.seasonYear || new Date().getFullYear()} · Pstrągi</p>
