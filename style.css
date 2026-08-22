@@ -431,6 +431,26 @@ body {
   overflow: hidden;
   text-overflow: ellipsis;
 }
+.lb-name-btn {
+  display: inline-block;
+  background: var(--accent);
+  color: #fff;
+  border: none;
+  border-radius: 999px;
+  padding: 5px 14px;
+  cursor: pointer;
+  font-size: 13px;
+  font-weight: 700;
+  font-family: 'Inter', sans-serif;
+  margin: 0 0 4px;
+  max-width: calc(100% - 24px);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  box-shadow: 0 1px 3px rgba(0,0,0,0.15);
+}
+.lb-name-btn:hover { filter: brightness(1.06); }
+.lb-name-btn:active { transform: scale(0.97); }
 .lb-card.leader .lb-name { color: #fff; }
 .lb-card.plain .lb-name { color: var(--text); }
 .lb-points {
@@ -445,6 +465,31 @@ body {
 .lb-card.leader .lb-sub { color: rgba(255,255,255,0.6); }
 .lb-card.plain .lb-sub { color: var(--text-muted); }
 .trophy-badge { position: absolute; top: 12px; right: 12px; }
+
+.lb-diff {
+  display: inline-block;
+  margin-top: 8px;
+  padding: 6px 16px;
+  border-radius: 999px;
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 24px;
+  font-weight: 700;
+}
+.lb-diff-up {
+  background: rgba(74, 158, 108, 0.16);
+  color: #4A9E6C;
+}
+.lb-diff-down {
+  background: rgba(193, 74, 44, 0.14);
+  color: #C14A2C;
+}
+.lb-diff-tie {
+  background: rgba(255,255,255,0.08);
+  color: var(--text-muted);
+  font-family: 'Inter', sans-serif;
+  font-weight: 500;
+}
+.lb-card.leader .lb-diff-tie { color: rgba(255,255,255,0.6); }
 
 .pb-grid {
   display: grid;
@@ -716,6 +761,108 @@ body {
 }
 .modal-danger-title { color: var(--danger); }
 .modal-danger-text { font-size: 13px; color: var(--text-muted); margin: 8px 0 16px; }
+
+.profile-modal { max-width: 400px; }
+.profile-stats-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+}
+.profile-stat-box {
+  background: var(--bg);
+  border-radius: 12px;
+  padding: 12px;
+  text-align: center;
+}
+.profile-stat-value {
+  font-size: 22px;
+  font-weight: 700;
+  color: var(--text);
+  margin: 0;
+}
+.profile-stat-label {
+  font-size: 11px;
+  color: var(--text-muted);
+  margin: 2px 0 0;
+}
+.badge-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 8px;
+}
+.badge-pill {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  background: var(--accent);
+  color: #fff;
+  border-radius: 999px;
+  padding: 5px 12px 5px 8px;
+  font-size: 12px;
+  font-weight: 600;
+}
+.badge-pill span { font-size: 14px; }
+
+.achievements-toggle {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  margin-top: 12px;
+  color: var(--text);
+}
+
+.achievements-grid {
+  margin-top: 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  max-height: 280px;
+  overflow-y: auto;
+}
+.achievement-item {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 12px;
+  border-radius: 12px;
+  background: var(--bg);
+}
+.achievement-item.locked { opacity: 0.55; }
+.achievement-icon {
+  font-size: 24px;
+  width: 36px;
+  text-align: center;
+  flex-shrink: 0;
+}
+.achievement-item.locked .achievement-icon { filter: grayscale(1); }
+.achievement-info { flex: 1; min-width: 0; }
+.achievement-name {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text);
+  margin: 0 0 3px;
+}
+.achievement-status {
+  font-size: 11px;
+  color: var(--text-muted);
+  margin: 3px 0 0;
+  font-family: 'JetBrains Mono', monospace;
+}
+.achievement-item.unlocked .achievement-status { color: #4A9E6C; font-weight: 700; }
+.achievement-progress-bar {
+  height: 5px;
+  background: var(--border);
+  border-radius: 999px;
+  overflow: hidden;
+}
+.achievement-progress-fill {
+  height: 100%;
+  background: var(--accent);
+  border-radius: 999px;
+}
+
 .btn-danger {
   background: var(--danger);
   color: #fff;

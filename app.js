@@ -51,6 +51,8 @@ const state = {
   uploadingPhoto: false,
   lightboxUrl: null,
   confirmDeleteId: null,
+  profileAnglerIdx: null,
+  showAllAchievements: false,
 };
 
 function getInitialTheme() {
@@ -190,6 +192,94 @@ function computeSeasonTotals(anglerNames, catches, trips) {
       ? 0
       : 1;
   return { perAngler, tripsCount, potAmount, winner };
+}
+
+function computeLifetimeStats(anglerIdx) {
+  const d = state.data;
+  const archivedSeasons = d.archivedSeasons || [];
+  const archivedCatches = archivedSeasons.flatMap((s) => s.catches || []);
+  const allCatches = [...(d.catches || []), ...archivedCatches];
+  const list = allCatches.filter((c) => c.angler === anglerIdx);
+  const totalPoints = Math.round(list.reduce((s, c) => s + c.points, 0) * 10) / 10;
+  const best = list.reduce((m, c) => (!m || c.length > m.length ? c : m), null);
+  const seasonsPlayed = archivedSeasons.length + 1; // +1 za bieżący sezon
+
+  const speciesSet = new Set(list.filter((c) => c.species).map((c) => c.species.trim().toLowerCase()));
+  const locationsSet = new Set(list.filter((c) => c.location).map((c) => c.location.trim().toLowerCase()));
+  const photoCount = list.filter((c) => c.photoUrl).length;
+
+  const archivedTripsCount = archivedSeasons.reduce((sum, s) => sum + (s.trips ? s.trips.length : 0), 0);
+  const tripsLifetime = (d.trips ? d.trips.length : 0) + archivedTripsCount;
+
+  return {
+    count: list.length,
+    totalPoints,
+    best,
+    seasonsPlayed,
+    speciesCount: speciesSet.size,
+    locationsCount: locationsSet.size,
+    photoCount,
+    tripsLifetime,
+  };
+}
+
+// Lista osiągnięć - progi i nazwy można łatwo zmienić/rozszerzyć w jednym miejscu.
+// "metric" wskazuje na pole z computeLifetimeStats (albo "bestLength" dla długości rekordu).
+const ACHIEVEMENTS = [
+  // Liczba złowionych ryb
+  { id: "fish-1", icon: "🎣", name: "Pierwsza ryba", metric: "count", target: 1 },
+  { id: "fish-10", icon: "🐟", name: "10 ryb", metric: "count", target: 10 },
+  { id: "fish-50", icon: "🐠", name: "50 ryb", metric: "count", target: 50 },
+  { id: "fish-100", icon: "🐡", name: "100 ryb", metric: "count", target: 100 },
+  { id: "fish-250", icon: "🦈", name: "250 ryb", metric: "count", target: 250 },
+  { id: "fish-500", icon: "🐋", name: "500 ryb", metric: "count", target: 500 },
+  { id: "fish-1000", icon: "👑", name: "1000 ryb", metric: "count", target: 1000 },
+  // Rozmiar rekordowej ryby
+  { id: "size-25", icon: "📏", name: "Ryba 25 cm+", metric: "bestLength", target: 25 },
+  { id: "size-30", icon: "🎯", name: "Ryba 30 cm+", metric: "bestLength", target: 30 },
+  { id: "size-35", icon: "🏆", name: "Ryba 35 cm+", metric: "bestLength", target: 35 },
+  { id: "size-40", icon: "💪", name: "Ryba 40 cm+", metric: "bestLength", target: 40 },
+  { id: "size-45", icon: "🔱", name: "Ryba 45 cm+", metric: "bestLength", target: 45 },
+  { id: "size-50", icon: "👹", name: "Potwór (50 cm+)", metric: "bestLength", target: 50 },
+  // Punkty łącznie
+  { id: "points-50", icon: "⭐", name: "50 punktów", metric: "totalPoints", target: 50 },
+  { id: "points-100", icon: "💯", name: "100 punktów", metric: "totalPoints", target: 100 },
+  { id: "points-250", icon: "🌟", name: "250 punktów", metric: "totalPoints", target: 250 },
+  { id: "points-500", icon: "✨", name: "500 punktów", metric: "totalPoints", target: 500 },
+  // Różnorodność gatunków
+  { id: "species-3", icon: "🐾", name: "3 gatunki", metric: "speciesCount", target: 3 },
+  { id: "species-5", icon: "🌈", name: "5 gatunków", metric: "speciesCount", target: 5 },
+  // Różnorodność miejsc
+  { id: "locations-3", icon: "🗺️", name: "3 rzeki", metric: "locationsCount", target: 3 },
+  { id: "locations-5", icon: "🧭", name: "5 rzek", metric: "locationsCount", target: 5 },
+  // Wyjazdy
+  { id: "trips-10", icon: "👢", name: "10 wyjazdów", metric: "tripsLifetime", target: 10 },
+  { id: "trips-25", icon: "🏕️", name: "25 wyjazdów", metric: "tripsLifetime", target: 25 },
+  { id: "trips-50", icon: "⛺", name: "50 wyjazdów", metric: "tripsLifetime", target: 50 },
+  // Sezony
+  { id: "veteran", icon: "🎖️", name: "Weteran (2 sezony)", metric: "seasonsPlayed", target: 2 },
+  { id: "legend", icon: "🏵️", name: "Legenda (5 sezonów)", metric: "seasonsPlayed", target: 5 },
+  // Zdjęcia
+  { id: "photos-10", icon: "📸", name: "10 zdjęć w galerii", metric: "photoCount", target: 10 },
+];
+
+function computeAchievements(anglerIdx) {
+  const lt = computeLifetimeStats(anglerIdx);
+  const values = {
+    count: lt.count,
+    totalPoints: lt.totalPoints,
+    bestLength: lt.best ? lt.best.length : 0,
+    seasonsPlayed: lt.seasonsPlayed,
+    speciesCount: lt.speciesCount,
+    locationsCount: lt.locationsCount,
+    tripsLifetime: lt.tripsLifetime,
+    photoCount: lt.photoCount,
+  };
+  return ACHIEVEMENTS.map((a) => {
+    const current = values[a.metric] || 0;
+    const unlocked = current >= a.target;
+    return { ...a, current, unlocked };
+  });
 }
 
 // ---------- Firebase Firestore ----------
@@ -847,13 +937,22 @@ function render() {
         ${d.anglerNames
           .map((name, idx) => {
             const s = stats.perAngler[idx];
+            const other = stats.perAngler[idx === 0 ? 1 : 0];
+            const diff = Math.round((s.totalPoints - other.totalPoints) * 10) / 10;
             const isLeader = leader === idx;
+            const diffHtml =
+              diff === 0
+                ? `<span class="lb-diff lb-diff-tie">remis</span>`
+                : diff > 0
+                ? `<span class="lb-diff lb-diff-up">+${diff.toFixed(1)}</span>`
+                : `<span class="lb-diff lb-diff-down">${diff.toFixed(1)}</span>`;
             return `
               <div class="lb-card ${isLeader ? "leader" : "plain"}">
                 ${isLeader ? `<div class="trophy-badge">${trophySvg(16, "#C97A3D")}</div>` : ""}
-                <p class="lb-name">${esc(name)}</p>
+                <button class="lb-name lb-name-btn" onclick="App.openProfile(${idx})">${esc(name)}</button>
                 <p class="lb-points font-mono">${s.totalPoints.toFixed(1)}</p>
                 <p class="lb-sub">${s.count} ${plFish(s.count)} · najw. ${s.best || 0} cm</p>
+                ${diffHtml}
               </div>`;
           })
           .join("")}
@@ -1130,6 +1229,89 @@ function render() {
     }
 
     ${
+      state.profileAnglerIdx !== null
+        ? (() => {
+            const idx = state.profileAnglerIdx;
+            const name = d.anglerNames[idx];
+            const lt = computeLifetimeStats(idx);
+            const pbValue = (d.personalBest && d.personalBest[idx]) ?? 0;
+            const achievements = computeAchievements(idx);
+            const unlocked = achievements.filter((a) => a.unlocked);
+            const showAll = state.showAllAchievements;
+            return `
+      <div class="modal-backdrop" onclick="App.closeProfileBackdrop(event)">
+        <div class="modal profile-modal">
+          <div class="modal-head">
+            <p class="font-display" style="font-size:20px;margin:0;">${esc(name)}</p>
+            <button onclick="App.closeProfile()" style="background:none;border:none;cursor:pointer;">${xSvg()}</button>
+          </div>
+
+          <div class="profile-stats-grid">
+            <div class="profile-stat-box">
+              <p class="profile-stat-value font-mono">${lt.count}</p>
+              <p class="profile-stat-label">${plFish(lt.count)} złowionych</p>
+            </div>
+            <div class="profile-stat-box">
+              <p class="profile-stat-value font-mono">${lt.totalPoints.toFixed(1)}</p>
+              <p class="profile-stat-label">punktów łącznie</p>
+            </div>
+            <div class="profile-stat-box">
+              <p class="profile-stat-value font-mono">${pbValue ? pbValue + " cm" : "—"}</p>
+              <p class="profile-stat-label">Personal Best</p>
+            </div>
+            <div class="profile-stat-box">
+              <p class="profile-stat-value font-mono">${lt.seasonsPlayed}</p>
+              <p class="profile-stat-label">${lt.seasonsPlayed === 1 ? "sezon" : "sezony"} rozegrane</p>
+            </div>
+          </div>
+
+          <p class="length-label" style="margin-top:18px;">🏆 Osiągnięcia (${unlocked.length}/${achievements.length})</p>
+
+          ${
+            unlocked.length > 0
+              ? `<div class="badge-row">
+                  ${unlocked
+                    .map((a) => `<div class="badge-pill" title="${esc(a.name)}"><span>${a.icon}</span> ${esc(a.name)}</div>`)
+                    .join("")}
+                </div>`
+              : `<p style="font-size:13px;color:var(--text-muted);margin:8px 0 0;">Brak zdobytych jeszcze - łapcie ryby!</p>`
+          }
+
+          <button class="btn-secondary achievements-toggle" onclick="App.toggleAllAchievements()">
+            ${showAll ? "Zwiń" : "Pokaż wszystkie osiągnięcia"} ${showAll ? chevronUpSvg() : chevronDownSvg()}
+          </button>
+
+          ${
+            showAll
+              ? `<div class="achievements-grid">
+                  ${achievements
+                    .map((a) => {
+                      const pct = Math.min(100, Math.round((a.current / a.target) * 100));
+                      return `
+                      <div class="achievement-item ${a.unlocked ? "unlocked" : "locked"}">
+                        <div class="achievement-icon">${a.icon}</div>
+                        <div class="achievement-info">
+                          <p class="achievement-name">${esc(a.name)}</p>
+                          ${
+                            a.unlocked
+                              ? `<p class="achievement-status">Zdobyte ✓</p>`
+                              : `<div class="achievement-progress-bar"><div class="achievement-progress-fill" style="width:${pct}%;"></div></div>
+                                 <p class="achievement-status">${a.metric === "totalPoints" ? a.current.toFixed(1) : a.current} / ${a.target}</p>`
+                          }
+                        </div>
+                      </div>`;
+                    })
+                    .join("")}
+                </div>`
+              : ""
+          }
+        </div>
+      </div>`;
+          })()
+        : ""
+    }
+
+    ${
       state.lightboxUrl
         ? `<div class="lightbox-backdrop" onclick="App.closeLightbox()">
             <img src="${state.lightboxUrl}" class="lightbox-img" />
@@ -1262,6 +1444,25 @@ window.App = {
   },
   closeLightbox() {
     state.lightboxUrl = null;
+    render();
+  },
+  openProfile(idx) {
+    state.profileAnglerIdx = idx;
+    state.showAllAchievements = false;
+    render();
+  },
+  closeProfile() {
+    state.profileAnglerIdx = null;
+    render();
+  },
+  closeProfileBackdrop(e) {
+    if (e.target.classList.contains("modal-backdrop")) {
+      state.profileAnglerIdx = null;
+      render();
+    }
+  },
+  toggleAllAchievements() {
+    state.showAllAchievements = !state.showAllAchievements;
     render();
   },
   toggleTheme() {
