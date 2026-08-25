@@ -40,6 +40,7 @@ const state = {
   showDateEdit: false,
   showResetConfirm: false,
   showEndSeasonConfirm: false,
+  showRecalcConfirm: false,
   showManageTrips: false,
   expandedArchive: {},
   showImportConfirm: false,
@@ -50,6 +51,7 @@ const state = {
   pendingPhoto: null,
   uploadingPhoto: false,
   uploadingGalleryPhoto: false,
+  galleryVisibleCount: 9,
   lightboxUrl: null,
   confirmDeleteId: null,
   profileAnglerIdx: null,
@@ -94,8 +96,52 @@ function formatDatePL(iso) {
   return `${d}.${m}.${y}`;
 }
 
-function computePoints(lengthCm) {
-  return Math.round((lengthCm / 10) * 10) / 10;
+const DEFAULT_SPECIES = "pstrąg potokowy";
+const SIZE_BONUS_TIERS = [
+  { min: 50, mult: 1.5 },
+  { min: 40, mult: 1.4 },
+  { min: 35, mult: 1.3 },
+  { min: 30, mult: 1.2 },
+  { min: 25, mult: 1.1 },
+];
+
+// Mnożnik za rozmiar: im większa ryba, tym większa premia (progi co 5 cm od 25 cm, patrz SIZE_BONUS_TIERS).
+function getSizeMultiplier(lengthCm) {
+  const tier = SIZE_BONUS_TIERS.find((t) => lengthCm >= t.min);
+  return tier ? tier.mult : 1;
+}
+
+// Mnożnik za gatunek: pstrąg potokowy to gatunek "domyślny" (bez premii), każdy inny wpisany +10%.
+function getSpeciesMultiplier(species) {
+  if (!species) return 1;
+  return species.trim().toLowerCase() === DEFAULT_SPECIES ? 1 : 1.1;
+}
+
+// Mnożniki się mnożą razem (np. duża ryba innego gatunku: 1.3 × 1.1 = 1.43).
+function computeMultiplier(lengthCm, species) {
+  const sizeMult = getSizeMultiplier(lengthCm);
+  const speciesMult = getSpeciesMultiplier(species);
+  return { sizeMult, speciesMult, totalMult: Math.round(sizeMult * speciesMult * 100) / 100 };
+}
+
+function computePoints(lengthCm, species) {
+  const { totalMult } = computeMultiplier(lengthCm, species || "");
+  return Math.round((lengthCm / 10) * totalMult * 10) / 10;
+}
+
+// Aktualizuje podgląd punktów (z rozbiciem mnożnika) bez pełnego re-renderu formularza,
+// żeby nie tracić fokusu w polach tekstowych przy każdym wciśnięciu klawisza.
+function refreshPointsPreviewDOM() {
+  const lengthNum = parseFloat(String(state.lengthInput).replace(",", "."));
+  const hasValidLength = state.lengthInput && !isNaN(lengthNum) && lengthNum > 0;
+  const mult = hasValidLength ? computeMultiplier(lengthNum, state.speciesInput) : null;
+  const pointsVal = hasValidLength ? computePoints(lengthNum, state.speciesInput).toFixed(1) : "0.0";
+  const noteHtml =
+    mult && mult.totalMult > 1
+      ? ` <span class="points-multiplier">(baza ${(lengthNum / 10).toFixed(1)} × ${mult.totalMult.toFixed(2)})</span>`
+      : "";
+  const el = document.querySelector(".points-preview");
+  if (el) el.innerHTML = `Punkty: <b>${pointsVal}</b>${noteHtml}`;
 }
 
 function plFish(n) {
@@ -196,6 +242,8 @@ function computeSeasonTotals(anglerNames, catches, trips) {
   return { perAngler, tripsCount, potAmount, winner };
 }
 
+// Statystyki "na całe życie" zawodnika - łączy bieżący sezon ze wszystkimi zarchiwizowanymi,
+// niezależnie ile razy appka przeszła przez "Zakończ sezon".
 function computeLifetimeStats(anglerIdx) {
   const d = state.data;
   const archivedSeasons = d.archivedSeasons || [];
@@ -510,7 +558,12 @@ async function uploadToImgbb(dataUrl) {
   if (!res.ok) throw new Error("Błąd wysyłania zdjęcia (" + res.status + ")");
   const json = await res.json();
   if (!json.success) throw new Error("imgbb zwróciło błąd");
-  return json.data.url;
+  // imgbb generuje osobną, małą miniaturkę - używamy jej w siatkach/listach,
+  // a pełny obraz dopiero po kliknięciu (mniej danych do pobrania przy dużej liczbie zdjęć)
+  return {
+    url: json.data.url,
+    thumbUrl: (json.data.thumb && json.data.thumb.url) || (json.data.medium && json.data.medium.url) || json.data.url,
+  };
 }
 
 // ---------- galeria zdjęć znad wody ----------
@@ -532,8 +585,11 @@ async function handleGalleryPhotoSelect(file) {
     render();
 
     let photoUrl = null;
+    let photoThumbUrl = null;
     try {
-      photoUrl = await uploadToImgbb(compressed);
+      const uploaded = await uploadToImgbb(compressed);
+      photoUrl = uploaded.url;
+      photoThumbUrl = uploaded.thumbUrl;
     } catch (e) {
       state.error = "Nie udało się wysłać zdjęcia do galerii.";
     }
@@ -544,7 +600,9 @@ async function handleGalleryPhotoSelect(file) {
       const entry = {
         id: `${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
         url: photoUrl,
+        thumbUrl: photoThumbUrl,
         date: todayISO(),
+        time: new Date().toISOString(),
       };
       persist({ ...state.data, galleryPhotos: [...(state.data.galleryPhotos || []), entry] });
     } else {
@@ -566,12 +624,15 @@ async function addCatch() {
   if (!len || len <= 0 || len > 200) return;
 
   let photoUrl = null;
+  let photoThumbUrl = null;
   if (state.pendingPhoto) {
     if (IMGBB_API_KEY) {
       state.uploadingPhoto = true;
       render();
       try {
-        photoUrl = await uploadToImgbb(state.pendingPhoto);
+        const uploaded = await uploadToImgbb(state.pendingPhoto);
+        photoUrl = uploaded.url;
+        photoThumbUrl = uploaded.thumbUrl;
       } catch (e) {
         state.error = "Nie udało się wysłać zdjęcia - ryba zostanie zapisana bez niego.";
       }
@@ -583,14 +644,17 @@ async function addCatch() {
     }
   }
 
+  const mult = computeMultiplier(len, state.speciesInput);
   const entry = {
     id: `${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
     date: state.data.currentSessionDate,
     angler: state.selectedAngler,
     length: len,
-    points: computePoints(len),
+    points: computePoints(len, state.speciesInput),
+    multiplier: mult.totalMult,
     time: new Date().toISOString(),
     photoUrl,
+    photoThumbUrl,
     species: state.speciesInput.trim() || null,
     location: state.locationInput.trim() || null,
   };
@@ -645,6 +709,45 @@ function askEndSeason() {
 function cancelEndSeason() {
   state.showEndSeasonConfirm = false;
   render();
+}
+
+// Liczy ile ryb (bieżący sezon + archiwum) jeszcze nie ma zapisanego mnożnika -
+// czyli zostały dodane zanim wprowadziliśmy system premii za rozmiar/gatunek.
+function countCatchesWithoutMultiplier() {
+  const d = state.data;
+  const current = (d.catches || []).filter((c) => c.multiplier === undefined).length;
+  const archived = (d.archivedSeasons || []).reduce(
+    (sum, s) => sum + (s.catches || []).filter((c) => c.multiplier === undefined).length,
+    0
+  );
+  return current + archived;
+}
+
+function askRecalculatePoints() {
+  state.showRecalcConfirm = true;
+  render();
+}
+
+function cancelRecalculatePoints() {
+  state.showRecalcConfirm = false;
+  render();
+}
+
+function recalculatePoints() {
+  const recalc = (c) => {
+    if (c.multiplier !== undefined) return c; // już przeliczona - nie ruszamy
+    const mult = computeMultiplier(c.length, c.species || "");
+    return { ...c, points: computePoints(c.length, c.species || ""), multiplier: mult.totalMult };
+  };
+  const d = state.data;
+  const nextData = {
+    ...d,
+    catches: (d.catches || []).map(recalc),
+    archivedSeasons: (d.archivedSeasons || []).map((s) => ({ ...s, catches: (s.catches || []).map(recalc) })),
+  };
+  persist(nextData);
+  state.showRecalcConfirm = false;
+  state.showSettings = false;
 }
 
 function endSeason() {
@@ -777,12 +880,14 @@ function catchRowHtml(c, name, isLast, readonly) {
       <div class="catch-row-main">
         ${
           c.photoUrl
-            ? `<img src="${c.photoUrl}" class="catch-thumb" onclick="App.openLightbox('${c.photoUrl}')" />`
+            ? `<img src="${c.photoThumbUrl || c.photoUrl}" loading="lazy" class="catch-thumb" onclick="App.openLightbox('${c.photoUrl}')" />`
             : ""
         }
         <div>
           <p class="catch-name">${esc(name)}</p>
-          <p class="catch-meta">${c.length} cm · ${c.points.toFixed(1)} pkt</p>
+          <p class="catch-meta">${c.length} cm · ${c.points.toFixed(1)} pkt${
+            c.multiplier && c.multiplier > 1 ? ` <span class="catch-mult">×${c.multiplier.toFixed(2)}</span>` : ""
+          }</p>
           ${extraBits ? `<p class="catch-extra">${esc(extraBits)}</p>` : ""}
         </div>
       </div>
@@ -817,7 +922,13 @@ function render() {
       : 1;
 
   const lengthNum = parseFloat(String(state.lengthInput).replace(",", "."));
-  const pointsPreview = state.lengthInput && !isNaN(lengthNum) ? computePoints(lengthNum).toFixed(1) : "0.0";
+  const hasValidLength = state.lengthInput && !isNaN(lengthNum) && lengthNum > 0;
+  const previewMultiplier = hasValidLength ? computeMultiplier(lengthNum, state.speciesInput) : null;
+  const pointsPreview = hasValidLength ? computePoints(lengthNum, state.speciesInput).toFixed(1) : "0.0";
+  const multiplierNote =
+    previewMultiplier && previewMultiplier.totalMult > 1
+      ? ` <span class="points-multiplier">(baza ${(lengthNum / 10).toFixed(1)} × ${previewMultiplier.totalMult.toFixed(2)})</span>`
+      : "";
 
   root.innerHTML = `
     <div class="header">
@@ -960,7 +1071,7 @@ function render() {
         }
 
         <div class="add-row">
-          <p class="points-preview">Punkty: <b>${pointsPreview}</b></p>
+          <p class="points-preview">Punkty: <b>${pointsPreview}</b>${multiplierNote}</p>
           <button class="btn-add" ${!state.lengthInput || state.saving || state.uploadingPhoto ? "disabled" : ""} onclick="App.addCatch()">
             ${state.uploadingPhoto ? "Wysyłanie zdjęcia…" : `${plusSvg()} Dodaj rybę`}
           </button>
@@ -1014,7 +1125,7 @@ function render() {
               <div class="big-fish-body">
                 ${
                   stats.biggestCatch.photoUrl
-                    ? `<img src="${stats.biggestCatch.photoUrl}" class="big-fish-photo" onclick="App.openLightbox('${stats.biggestCatch.photoUrl}')" />`
+                    ? `<img src="${stats.biggestCatch.photoThumbUrl || stats.biggestCatch.photoUrl}" loading="lazy" class="big-fish-photo" onclick="App.openLightbox('${stats.biggestCatch.photoUrl}')" />`
                     : `<div class="big-fish-photo big-fish-photo-placeholder">${fishSvg(36, "#fff")}</div>`
                 }
                 <div class="big-fish-info">
@@ -1173,19 +1284,36 @@ function render() {
       ${state.uploadingGalleryPhoto ? `<p style="font-size:12px;color:var(--text-muted);margin:8px 0 0;">Wysyłanie zdjęcia…</p>` : ""}
       ${
         (d.galleryPhotos || []).length > 0
-          ? `<div class="gallery-grid">
-              ${(d.galleryPhotos || [])
+          ? (() => {
+              const sorted = (d.galleryPhotos || [])
                 .slice()
-                .sort((a, b) => (a.date < b.date ? 1 : -1))
-                .map(
-                  (p) => `
-                <div class="gallery-item">
-                  <img src="${p.url}" class="gallery-thumb" onclick="App.openLightbox('${p.url}')" />
-                  <button class="gallery-del-btn" onclick="App.deleteGalleryPhoto('${p.id}')" aria-label="Usuń">✕</button>
-                </div>`
-                )
-                .join("")}
-            </div>`
+                .sort((a, b) => (a.time || a.date) < (b.time || b.date) ? 1 : -1);
+              const visible = sorted.slice(0, state.galleryVisibleCount);
+              const remaining = sorted.length - visible.length;
+              return `<div class="gallery-grid">
+                  ${visible
+                    .map(
+                      (p) => `
+                    <div class="gallery-item">
+                      <img src="${p.thumbUrl || p.url}" loading="lazy" class="gallery-thumb" onclick="App.openLightbox('${p.url}')" />
+                      <button class="gallery-del-btn" onclick="App.deleteGalleryPhoto('${p.id}')" aria-label="Usuń">✕</button>
+                    </div>`
+                    )
+                    .join("")}
+                </div>
+                <div class="gallery-buttons-row">
+                  ${
+                    remaining > 0
+                      ? `<button class="btn-secondary gallery-more-btn" onclick="App.showMoreGalleryPhotos()">Pokaż więcej (jeszcze ${remaining})</button>`
+                      : ""
+                  }
+                  ${
+                    state.galleryVisibleCount > 9
+                      ? `<button class="btn-secondary gallery-more-btn" onclick="App.hideGalleryPhotos()">Zwiń</button>`
+                      : ""
+                  }
+                </div>`;
+            })()
           : `<p style="font-size:13px;color:var(--text-muted);margin:10px 0 0;">Brak zdjęć - dodajcie pierwsze z Waszych wypraw.</p>`
       }
 
@@ -1235,6 +1363,28 @@ function render() {
                 <button class="btn-secondary" onclick="App.cancelEndSeason()">Anuluj</button>
               `;
                     })()
+                  : state.showRecalcConfirm
+                  ? (() => {
+                      const affected = countCatchesWithoutMultiplier();
+                      return `
+                <div class="modal-head">
+                  <p class="font-display" style="font-size:18px;margin:0;">Przeliczyć punkty za mnożniki?</p>
+                </div>
+                <p class="modal-danger-text">
+                  ${
+                    affected === 0
+                      ? "Wszystkie ryby mają już przeliczone mnożniki - nie ma nic do zrobienia."
+                      : `Znaleziono ${affected} ${plFish(affected)} złowionych przed wprowadzeniem premii za rozmiar/gatunek. Ich punkty zostaną przeliczone (mogą wzrosnąć), co wpłynie na wynik sezonu i archiwum. Ryby, które już mają zapisany mnożnik, zostaną pominięte.`
+                  }
+                </p>
+                ${
+                  affected > 0
+                    ? `<button class="btn-copper" style="width:100%;" onclick="App.recalculatePoints()">Tak, przelicz ${affected} ${plFish(affected)}</button>`
+                    : ""
+                }
+                <button class="btn-secondary" onclick="App.cancelRecalculatePoints()">${affected === 0 ? "Zamknij" : "Anuluj"}</button>
+              `;
+                    })()
                   : state.showManageTrips
                   ? `
                 <div class="modal-head">
@@ -1282,6 +1432,9 @@ function render() {
                 <label class="length-label">Sezon</label>
                 <button class="btn-secondary" style="margin-top:8px;color:var(--text);border-color:var(--border);" onclick="App.openManageTrips()">💰 Zarządzaj wyjazdami (pula: ${stats.potAmount} zł)</button>
                 <button class="btn-secondary" style="margin-top:8px;color:var(--text);border-color:var(--border);" onclick="App.askEndSeason()">🏁 Zakończ sezon ${d.seasonYear} i rozpocznij nowy</button>
+
+                <label class="length-label">Punktacja</label>
+                <button class="btn-secondary" style="margin-top:8px;color:var(--text);border-color:var(--border);" onclick="App.askRecalculatePoints()">🔄 Przelicz mnożniki dla starszych ryb</button>
 
                 <button class="btn-secondary" style="border-color:#E8B9A6;color:#B14A2C;margin-top:20px;" onclick="App.askReset()">Wyczyść wszystkie dane</button>
               `
@@ -1488,15 +1641,13 @@ window.App = {
   },
   setLength(v) {
     state.lengthInput = v;
-    const lengthNum = parseFloat(String(v).replace(",", "."));
-    const preview = v && !isNaN(lengthNum) ? computePoints(lengthNum).toFixed(1) : "0.0";
-    const previewEl = document.querySelector(".points-preview b");
-    if (previewEl) previewEl.textContent = preview;
+    refreshPointsPreviewDOM();
     const addBtn = document.querySelector(".btn-add");
     if (addBtn) addBtn.disabled = !v || state.saving;
   },
   setSpecies(v) {
-    state.speciesInput = v; // bez render() - nic innego na ekranie od tego nie zależy na żywo
+    state.speciesInput = v;
+    refreshPointsPreviewDOM(); // wpływa na mnożnik, więc trzeba przeliczyć podgląd punktów
   },
   setLocation(v) {
     state.locationInput = v;
@@ -1555,6 +1706,14 @@ window.App = {
     guardedAction(() => handleGalleryPhotoSelect(file))();
   },
   deleteGalleryPhoto: guardedAction(deleteGalleryPhoto),
+  showMoreGalleryPhotos() {
+    state.galleryVisibleCount += 9;
+    render();
+  },
+  hideGalleryPhotos() {
+    state.galleryVisibleCount = 9;
+    render();
+  },
   toggleTheme() {
     state.theme = state.theme === "dark" ? "light" : "dark";
     try {
@@ -1567,6 +1726,7 @@ window.App = {
     state.showResetConfirm = false;
     state.showEndSeasonConfirm = false;
     state.showManageTrips = false;
+    state.showRecalcConfirm = false;
     render();
   },
   closeSettingsBackdrop(e) {
@@ -1575,6 +1735,7 @@ window.App = {
       state.showResetConfirm = false;
       state.showEndSeasonConfirm = false;
       state.showManageTrips = false;
+      state.showRecalcConfirm = false;
       render();
     }
   },
@@ -1629,6 +1790,9 @@ window.App = {
   askEndSeason,
   cancelEndSeason,
   endSeason: guardedAction(endSeason),
+  askRecalculatePoints,
+  cancelRecalculatePoints,
+  recalculatePoints: guardedAction(recalculatePoints),
   toggleArchive(year) {
     state.expandedArchive[year] = !state.expandedArchive[year];
     render();
