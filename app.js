@@ -34,8 +34,12 @@ const state = {
   selectedAngler: 0,
   lengthInput: "",
   showAddForm: false,
+  editingTripDate: null,
+  editingCatchId: null,
   speciesInput: "",
-  locationInput: "",
+  customSpecies: false,
+  customSpeciesInput: "",
+  locationDraft: "",
   showSettings: false,
   showDateEdit: false,
   showResetConfirm: false,
@@ -124,9 +128,14 @@ function computeMultiplier(lengthCm, species) {
   return { sizeMult, speciesMult, totalMult: Math.round(sizeMult * speciesMult * 100) / 100 };
 }
 
+function getPointsDivisor(lengthCm, species) {
+  const normalizedSpecies = (species || DEFAULT_SPECIES).trim().toLowerCase();
+  return normalizedSpecies === DEFAULT_SPECIES && lengthCm < 25 ? 20 : 10;
+}
+
 function computePoints(lengthCm, species) {
   const { totalMult } = computeMultiplier(lengthCm, species || "");
-  return Math.round((lengthCm / 10) * totalMult * 10) / 10;
+  return Math.round((lengthCm / getPointsDivisor(lengthCm, species)) * totalMult * 10) / 10;
 }
 
 // Aktualizuje podgląd punktów (z rozbiciem mnożnika) bez pełnego re-renderu formularza,
@@ -134,11 +143,13 @@ function computePoints(lengthCm, species) {
 function refreshPointsPreviewDOM() {
   const lengthNum = parseFloat(String(state.lengthInput).replace(",", "."));
   const hasValidLength = state.lengthInput && !isNaN(lengthNum) && lengthNum > 0;
-  const mult = hasValidLength ? computeMultiplier(lengthNum, state.speciesInput) : null;
-  const pointsVal = hasValidLength ? computePoints(lengthNum, state.speciesInput).toFixed(1) : "0.0";
+  const mult = hasValidLength ? computeMultiplier(lengthNum, selectedSpecies()) : null;
+  const pointsVal = hasValidLength ? computePoints(lengthNum, selectedSpecies()).toFixed(1) : "0.0";
   const noteHtml =
     mult && mult.totalMult > 1
-      ? ` <span class="points-multiplier">(baza ${(lengthNum / 10).toFixed(1)} × ${mult.totalMult.toFixed(2)})</span>`
+      ? ` <span class="points-multiplier">(baza ${(lengthNum / getPointsDivisor(lengthNum, selectedSpecies())).toFixed(1)} × ${mult.totalMult.toFixed(2)})</span>`
+      : hasValidLength && getPointsDivisor(lengthNum, selectedSpecies()) === 20
+      ? ` <span class="points-multiplier">(${lengthNum} cm ÷ 20)</span>`
       : "";
   const el = document.querySelector(".points-preview");
   if (el) el.innerHTML = `Punkty: <b>${pointsVal}</b>${noteHtml}`;
@@ -157,10 +168,83 @@ function plTrip(n) {
 }
 
 const COMMON_SPECIES = ["Pstrąg potokowy", "Pstrąg tęczowy", "Lipień", "Głowacica", "Troć"];
+const RIVER_SPECIES = {
+  bystrzyca: ["Pstrąg potokowy", "Okoń", "Kleń"],
+  skora: ["Pstrąg potokowy", "Okoń", "Kleń", "Lipień"],
+  kaczawa: ["Pstrąg potokowy", "Okoń", "Kleń", "Lipień", "Szczupak", "Jaź"],
+};
+
+function getWorkingDate() {
+  return state.editingTripDate || state.data.activeSessionDate || state.data.currentSessionDate;
+}
+
+function resetCatchForm() {
+  state.editingCatchId = null;
+  state.lengthInput = "";
+  state.speciesInput = "";
+  state.customSpecies = false;
+  state.customSpeciesInput = "";
+  state.pendingPhoto = null;
+  state.showAddForm = false;
+}
+
+function endTrip() {
+  if (!state.data.activeSessionDate) return;
+  resetCatchForm();
+  state.editingTripDate = null;
+  state.showDateEdit = false;
+  const date = state.data.activeSessionDate;
+  const tripBonusRules = { ...(state.data.tripBonusRules || {}) };
+  if (tripBonusRules[date]) tripBonusRules[date] = { ...tripBonusRules[date], ended: true };
+  persist({ ...state.data, activeSessionDate: null, tripBonusRules });
+}
+
+function editTrip(date) {
+  if (!(state.data.trips || []).includes(date) && !state.data.catches.some(c => c.date === date)) return;
+  resetCatchForm();
+  state.editingTripDate = date;
+  state.dateDraft = date;
+  state.locationDraft = getSessionLocation(date);
+  state.showDateEdit = !state.locationDraft;
+  state.showSettings = false;
+  render();
+  root.scrollIntoView({ behavior: "smooth", block: "start" });
+}
+
+function editCatch(id) {
+  const entry = state.data.catches.find(c => c.id === id);
+  if (!entry) return;
+  editTrip(entry.date);
+  state.editingCatchId = id;
+  state.selectedAngler = entry.angler;
+  state.lengthInput = String(entry.length);
+  state.speciesInput = entry.species || "Pstrąg potokowy";
+  state.customSpecies = !getSessionSpecies().includes(state.speciesInput);
+  state.customSpeciesInput = state.customSpecies ? state.speciesInput : "";
+  state.showAddForm = true;
+  render();
+}
+
+function getSessionLocation(date = getWorkingDate()) {
+  return (state.data.tripLocations || {})[date] ||
+    ((state.data.catches || []).find(c => c.date === date && c.location) || {}).location || "";
+}
+
+function getSessionSpecies() {
+  return RIVER_SPECIES[getSessionLocation().trim().toLocaleLowerCase("pl-PL")] || COMMON_SPECIES;
+}
+
+function selectedSpecies() {
+  if (state.customSpecies) return state.customSpeciesInput.trim();
+  const available = getSessionSpecies();
+  return available.includes(state.speciesInput) ? state.speciesInput : available[0];
+}
+
 const COMMON_LOCATIONS = ["Bystrzyca", "Skora", "Kaczawa"];
 
 function getLocationSuggestions() {
   const set = new Set(COMMON_LOCATIONS);
+  Object.values(state.data.tripLocations || {}).forEach((location) => set.add(location));
   (state.data.catches || []).forEach((c) => {
     if (c.location) set.add(c.location);
   });
@@ -216,7 +300,10 @@ function defaultData() {
     personalBest: [0, 0],
     seasonYear: new Date().getFullYear(),
     currentSessionDate: todayISO(),
+    activeSessionDate: null,
     trips: [],
+    tripLocations: {},
+    tripBonusRules: {},
     galleryPhotos: [],
     archivedSeasons: [],
     catches: [],
@@ -225,11 +312,46 @@ function defaultData() {
 
 // Liczy podsumowanie (punkty, liczba ryb, pula, zwycięzca) dla dowolnego zestawu danych sezonu -
 // używane zarówno dla bieżącego sezonu, jak i przy zamykaniu/przeglądaniu archiwum.
-function computeSeasonTotals(anglerNames, catches, trips) {
+// Bonusy wynikają z aktualnych połowów, więc edycja nigdy nie dodaje ich drugi raz.
+// Wyłącznie wyjazd z zapisaną wersją zasad może otrzymać bonusy.
+function computeTripBonuses(catches, rule) {
+  const result = [0, 1].map(() => ({ biggest: 0, most: 0, total: 0 }));
+  if (!rule || rule.version !== 1 || !rule.ended || !catches.length) return result;
+  const largest = Math.max(...catches.map(c => c.length));
+  const counts = [0, 1].map(idx => catches.filter(c => c.angler === idx).length);
+  const most = Math.max(...counts);
+  result.forEach((bonus, idx) => {
+    bonus.biggest = catches.some(c => c.angler === idx && c.length === largest) ? 3 : 0;
+    bonus.most = counts[idx] === most && most > 0 ? 1.3 : 0;
+    bonus.total = Math.round((bonus.biggest + bonus.most) * 10) / 10;
+  });
+  return result;
+}
+
+function computeBonusTotals(catches, tripBonusRules = {}) {
+  const totals = [0, 0];
+  Object.entries(tripBonusRules).forEach(([date, rule]) => {
+    computeTripBonuses(catches.filter(c => c.date === date), rule).forEach((bonus, idx) => {
+      totals[idx] = Math.round((totals[idx] + bonus.total) * 10) / 10;
+    });
+  });
+  return totals;
+}
+
+function tripBonusHtml(date) {
+  const rule = (state.data.tripBonusRules || {})[date];
+  if (!rule || rule.version !== 1) return "";
+  if (!rule.ended) return `<p class="trip-bonus-note">Po zakończeniu: +3 pkt za największą rybę i +1,3 pkt za najwięcej ryb. Remis: bonus dla obu.</p>`;
+  const bonuses = computeTripBonuses(state.data.catches.filter(c => c.date === date), rule);
+  return `<div class="trip-bonus-note"><strong>Bonusy za wyjazd</strong>${bonuses.map((b, idx) => `<p>${esc(state.data.anglerNames[idx])}: +${b.total.toFixed(1)} pkt (największa ryba: +${b.biggest}, najwięcej ryb: +${b.most})</p>`).join("")}</div>`;
+}
+
+function computeSeasonTotals(anglerNames, catches, trips, tripBonusRules = {}) {
+  const bonusTotals = computeBonusTotals(catches, tripBonusRules);
   const perAngler = [0, 1].map((idx) => {
     const list = catches.filter((c) => c.angler === idx);
-    const totalPoints = Math.round(list.reduce((s, c) => s + c.points, 0) * 10) / 10;
-    return { count: list.length, totalPoints };
+    const totalPoints = Math.round((list.reduce((s, c) => s + c.points, 0) + bonusTotals[idx]) * 10) / 10;
+    return { count: list.length, totalPoints, bonusPoints: bonusTotals[idx] };
   });
   const tripsCount = Array.isArray(trips) ? trips.length : 0;
   const potAmount = tripsCount * 10;
@@ -250,7 +372,9 @@ function computeLifetimeStats(anglerIdx) {
   const archivedCatches = archivedSeasons.flatMap((s) => s.catches || []);
   const allCatches = [...(d.catches || []), ...archivedCatches];
   const list = allCatches.filter((c) => c.angler === anglerIdx);
-  const totalPoints = Math.round(list.reduce((s, c) => s + c.points, 0) * 10) / 10;
+  const bonusPoints = [d, ...archivedSeasons].reduce((sum, season) =>
+    sum + computeBonusTotals(season.catches || [], season.tripBonusRules || {})[anglerIdx], 0);
+  const totalPoints = Math.round((list.reduce((s, c) => s + c.points, 0) + bonusPoints) * 10) / 10;
   const best = list.reduce((m, c) => (!m || c.length > m.length ? c : m), null);
   const seasonsPlayed = archivedSeasons.length + 1; // +1 za bieżący sezon
 
@@ -375,7 +499,6 @@ async function loadInitial() {
     render();
     return;
   }
-  let needsDateSync = false;
   try {
     const record = await fetchRemote();
     if (record && record.anglerNames) {
@@ -401,20 +524,9 @@ async function loadInitial() {
       state.error = "Nie udało się połączyć z bazą danych i brak lokalnej kopii zapasowej na tym telefonie.";
     }
   } finally {
-    // Pole "Dzień połowów" ma zawsze pokazywać RZECZYWISTĄ dzisiejszą datę przy otwarciu apki,
-    // żeby nowe ryby nie zapisywały się pod nieaktualnym dniem. To NIE dolicza wyjazdu do puli -
-    // to nadal wymaga świadomego kliknięcia "zmień" → "Ustaw" (żeby nie doliczać 10 zł za samo
-    // zerknięcie do wyniku, gdy nikt nie wyszedł na ryby).
-    if (state.data && state.data.currentSessionDate !== todayISO()) {
-      state.data.currentSessionDate = todayISO();
-      needsDateSync = true;
-    }
     state.loading = false;
     render();
     startRealtimeSync();
-    if (needsDateSync) {
-      persist(state.data);
-    }
   }
 }
 
@@ -480,16 +592,28 @@ async function persist(next) {
 
 // ---------- akcje ----------
 function startNewSession() {
-  if (!state.dateDraft) return;
+  const location = state.locationDraft.trim();
+  const date = state.editingTripDate || state.dateDraft;
+  if (!date || !location) return;
   const trips = Array.isArray(state.data.trips) ? [...state.data.trips] : [];
-  if (!trips.includes(state.dateDraft)) trips.push(state.dateDraft);
-  persist({ ...state.data, currentSessionDate: state.dateDraft, trips });
+  const tripBonusRules = { ...(state.data.tripBonusRules || {}) };
+  const isNewTrip = !state.editingTripDate && !trips.includes(date) &&
+    !state.data.catches.some(c => c.date === date) && !tripBonusRules[date];
+  if (isNewTrip) tripBonusRules[date] = { version: 1, ended: false };
+  if (!state.editingTripDate && !trips.includes(date)) trips.push(date);
   state.showDateEdit = false;
+  resetCatchForm();
+  const session = state.editingTripDate ? {} : { currentSessionDate: date, activeSessionDate: date };
+  persist({ ...state.data, ...session, trips, tripBonusRules,
+    catches: state.data.catches.map(c => c.date === date ? { ...c, location } : c),
+    tripLocations: { ...(state.data.tripLocations || {}), [date]: location } });
 }
 
 function removeTrip(date) {
   const trips = (state.data.trips || []).filter((t) => t !== date);
-  persist({ ...state.data, trips });
+  const tripLocations = { ...(state.data.tripLocations || {}) };
+  delete tripLocations[date];
+  persist({ ...state.data, trips, tripLocations, activeSessionDate: state.data.activeSessionDate === date ? null : state.data.activeSessionDate });
 }
 
 // ---------- zdjęcia ryb ----------
@@ -622,9 +746,30 @@ function deleteGalleryPhoto(id) {
 async function addCatch() {
   const len = parseFloat(String(state.lengthInput).replace(",", "."));
   if (!len || len <= 0 || len > 200) return;
+  if (!state.editingTripDate && !state.data.activeSessionDate) return;
+  const location = getSessionLocation();
+  if (!location) {
+    state.showDateEdit = true;
+    state.dateDraft = getWorkingDate();
+    render();
+    return;
+  }
+  const species = selectedSpecies();
+  if (!species) {
+    const input = document.getElementById("custom-species-input");
+    if (input) {
+      input.setCustomValidity("Wpisz gatunek ryby.");
+      input.reportValidity();
+    }
+    return;
+  }
+  const date = getWorkingDate();
+  const existing = state.editingCatchId ? state.data.catches.find(c => c.id === state.editingCatchId) : null;
+  if (state.editingCatchId && !existing) return;
+  const angler = state.selectedAngler;
 
-  let photoUrl = null;
-  let photoThumbUrl = null;
+  let photoUrl = existing ? existing.photoUrl : null;
+  let photoThumbUrl = existing ? existing.photoThumbUrl : null;
   if (state.pendingPhoto) {
     if (IMGBB_API_KEY) {
       state.uploadingPhoto = true;
@@ -644,26 +789,25 @@ async function addCatch() {
     }
   }
 
-  const mult = computeMultiplier(len, state.speciesInput);
+  const mult = computeMultiplier(len, species);
   const entry = {
-    id: `${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
-    date: state.data.currentSessionDate,
-    angler: state.selectedAngler,
+    id: existing ? existing.id : `${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+    date,
+    angler,
     length: len,
-    points: computePoints(len, state.speciesInput),
+    points: computePoints(len, species),
     multiplier: mult.totalMult,
-    time: new Date().toISOString(),
+    time: existing ? existing.time : new Date().toISOString(),
     photoUrl,
     photoThumbUrl,
-    species: state.speciesInput.trim() || null,
-    location: state.locationInput.trim() || null,
+    species,
+    location,
   };
-  persist({ ...state.data, catches: [...state.data.catches, entry] });
-  state.lengthInput = "";
-  state.speciesInput = "";
-  state.locationInput = "";
-  state.pendingPhoto = null;
-  state.showAddForm = false;
+  const catches = existing
+    ? state.data.catches.map(c => c.id === existing.id ? { ...c, ...entry } : c)
+    : [...state.data.catches, entry];
+  resetCatchForm();
+  persist({ ...state.data, catches });
 }
 
 function deleteCatch(id) {
@@ -757,13 +901,18 @@ function endSeason() {
     endedAt: new Date().toISOString(),
     anglerNames: d.anglerNames,
     trips: d.trips || [],
+    tripLocations: d.tripLocations || {},
+    tripBonusRules: d.tripBonusRules || {},
     catches: d.catches,
   };
   const nextData = {
     ...d,
     seasonYear: (d.seasonYear || new Date().getFullYear()) + 1,
     currentSessionDate: todayISO(),
+    activeSessionDate: null,
     trips: [],
+    tripLocations: {},
+    tripBonusRules: {},
     catches: [],
     archivedSeasons: [...(d.archivedSeasons || []), archived],
     // personalBest i anglerNames NIE resetujemy - to rekordy życiowe, niezależne od sezonu
@@ -833,20 +982,21 @@ function cancelImport() {
 // ---------- stats ----------
 function computeStats() {
   const d = state.data;
+  const bonusTotals = computeBonusTotals(d.catches, d.tripBonusRules || {});
   const perAngler = [0, 1].map((idx) => {
     const list = d.catches.filter((c) => c.angler === idx);
-    const totalPoints = Math.round(list.reduce((s, c) => s + c.points, 0) * 10) / 10;
+    const totalPoints = Math.round((list.reduce((s, c) => s + c.points, 0) + bonusTotals[idx]) * 10) / 10;
     const best = list.reduce((m, c) => (c.length > m ? c.length : m), 0);
     const bestCatch = list.reduce((m, c) => (!m || c.length > m.length ? c : m), null);
-    return { count: list.length, totalPoints, best, bestCatch };
+    return { count: list.length, totalPoints, bonusPoints: bonusTotals[idx], best, bestCatch };
   });
-  const todays = d.catches.filter((c) => c.date === d.currentSessionDate);
+  const todays = d.catches.filter((c) => c.date === getWorkingDate());
   const byDate = {};
   d.catches.forEach((c) => {
     byDate[c.date] = byDate[c.date] || [];
     byDate[c.date].push(c);
   });
-  const dates = Object.keys(byDate).sort((a, b) => (a < b ? 1 : -1));
+  const dates = [...new Set([...Object.keys(byDate), ...(d.trips || [])])].sort((a, b) => (a < b ? 1 : -1));
   const tripsCount = Array.isArray(d.trips) ? d.trips.length : 0;
   const potAmount = tripsCount * 10;
   const biggestCatch = d.catches.reduce((m, c) => (!m || c.length > m.length ? c : m), null);
@@ -891,7 +1041,7 @@ function catchRowHtml(c, name, isLast, readonly) {
           ${extraBits ? `<p class="catch-extra">${esc(extraBits)}</p>` : ""}
         </div>
       </div>
-      ${readonly ? "" : `<button class="del-btn" onclick="App.askDeleteCatch('${c.id}')" aria-label="Usuń">✕</button>`}
+      ${readonly ? "" : `<button class="link-btn" onclick="App.editCatch('${c.id}')">Edytuj</button><button class="del-btn" onclick="App.askDeleteCatch('${c.id}')" aria-label="Usuń">✕</button>`}
     </div>`;
 }
 
@@ -923,15 +1073,19 @@ function render() {
 
   const lengthNum = parseFloat(String(state.lengthInput).replace(",", "."));
   const hasValidLength = state.lengthInput && !isNaN(lengthNum) && lengthNum > 0;
-  const previewMultiplier = hasValidLength ? computeMultiplier(lengthNum, state.speciesInput) : null;
-  const pointsPreview = hasValidLength ? computePoints(lengthNum, state.speciesInput).toFixed(1) : "0.0";
+  const previewMultiplier = hasValidLength ? computeMultiplier(lengthNum, selectedSpecies()) : null;
+  const pointsPreview = hasValidLength ? computePoints(lengthNum, selectedSpecies()).toFixed(1) : "0.0";
   const multiplierNote =
     previewMultiplier && previewMultiplier.totalMult > 1
-      ? ` <span class="points-multiplier">(baza ${(lengthNum / 10).toFixed(1)} × ${previewMultiplier.totalMult.toFixed(2)})</span>`
+      ? ` <span class="points-multiplier">(baza ${(lengthNum / getPointsDivisor(lengthNum, selectedSpecies())).toFixed(1)} × ${previewMultiplier.totalMult.toFixed(2)})</span>`
+      : hasValidLength && getPointsDivisor(lengthNum, selectedSpecies()) === 20
+      ? ` <span class="points-multiplier">(${lengthNum} cm ÷ 20)</span>`
       : "";
 
   root.innerHTML = `
     <div class="header">
+      ${d.activeSessionDate ? `<button class="btn-copper end-trip-btn" onclick="App.endTrip()" ${state.saving || state.uploadingPhoto ? "disabled" : ""}>Zakończ wyjazd · ${formatDatePL(d.activeSessionDate)}</button>` : ""}
+      ${state.editingTripDate ? `<div class="trip-edit-banner">Edytujesz wyjazd: ${formatDatePL(state.editingTripDate)} <button class="btn-copper" onclick="App.closeTripEdit()">Gotowe — wróć</button></div>` : ""}
       <div class="header-top">
         <div>
           <p class="eyebrow">Sezon ${d.seasonYear || new Date().getFullYear()} · Pstrągi</p>
@@ -943,13 +1097,17 @@ function render() {
         </div>
       </div>
       <div class="session-bar">
-        <span>${calendarSvg()} Dzień połowów: ${formatDatePL(d.currentSessionDate)}</span>
-        <button class="link-btn" onclick="App.toggleDateEdit()">zmień</button>
+        <span>${calendarSvg()} ${state.editingTripDate ? "Edycja wyjazdu" : d.activeSessionDate ? "Dzień połowów" : "Brak aktywnego wyjazdu"}${state.editingTripDate || d.activeSessionDate ? ": " + formatDatePL(getWorkingDate()) : ""}${state.editingTripDate || d.activeSessionDate ? (getSessionLocation() ? " · " + esc(getSessionLocation()) : " · wybierz rzekę") : ""}</span>
+        <button class="link-btn" onclick="App.toggleDateEdit()">${state.editingTripDate || d.activeSessionDate ? "zmień rzekę" : "Dodaj wyjazd"}</button>
       </div>
       ${
         state.showDateEdit
           ? `<div class="date-edit">
-              <input type="date" id="date-draft-input" value="${d.currentSessionDate}" />
+              <input type="date" id="date-draft-input" ${state.editingTripDate || d.activeSessionDate ? "disabled" : ""} value="${state.dateDraft}" onchange="App.setTripDate(this.value)" aria-label="Dzień połowów" />
+              <input type="text" id="location-draft-input" list="trip-location-suggestions" value="${esc(state.locationDraft)}" placeholder="Wybierz lub wpisz rzekę" aria-label="Rzeka" />
+              <datalist id="trip-location-suggestions">
+                ${getLocationSuggestions().map((l) => `<option value="${esc(l)}"></option>`).join("")}
+              </datalist>
               <button class="btn-copper" onclick="App.confirmDate()">Ustaw</button>
             </div>`
           : ""
@@ -971,6 +1129,7 @@ function render() {
     </div>
 
     <div class="container">
+      ${state.editingTripDate || d.activeSessionDate ? tripBonusHtml(getWorkingDate()) : ""}
       <div class="pot-card">
         <div>
           <p class="pot-label">${coinsSvg()} Pula sezonu</p>
@@ -987,13 +1146,13 @@ function render() {
       </div>
 
       ${
-        !state.showAddForm
+        !state.showAddForm || (!state.editingTripDate && !d.activeSessionDate)
           ? `<button class="add-fish-trigger" onclick="App.toggleAddForm()">
               ${plusSvg()} Zapisz złowioną rybę
             </button>`
           : `<div class="card add-fish-card">
         <div class="add-fish-header">
-          <p class="font-display" style="font-size:18px;margin:0;">Zapisz złowioną rybę</p>
+          <p class="font-display" style="font-size:18px;margin:0;">${state.editingCatchId ? "Edytuj rybę" : "Zapisz złowioną rybę"}</p>
           <button class="collapse-btn" onclick="App.toggleAddForm()" aria-label="Zwiń">${chevronUpSvg()}</button>
         </div>
         <div class="angler-toggle">
@@ -1020,36 +1179,14 @@ function render() {
           oninput="App.setLength(this.value)"
         />
 
-        <div class="two-col-row">
-          <div>
-            <label class="length-label">Gatunek (opcjonalnie)</label>
-            <input
-              class="text-input"
-              type="text"
-              list="species-suggestions"
-              placeholder="np. pstrąg potokowy"
-              value="${esc(state.speciesInput)}"
-              oninput="App.setSpecies(this.value)"
-            />
-            <datalist id="species-suggestions">
-              ${COMMON_SPECIES.map((s) => `<option value="${esc(s)}"></option>`).join("")}
-            </datalist>
-          </div>
-          <div>
-            <label class="length-label">Miejsce (opcjonalnie)</label>
-            <input
-              class="text-input"
-              type="text"
-              list="location-suggestions"
-              placeholder="np. Dunajec"
-              value="${esc(state.locationInput)}"
-              oninput="App.setLocation(this.value)"
-            />
-            <datalist id="location-suggestions">
-              ${getLocationSuggestions().map((l) => `<option value="${esc(l)}"></option>`).join("")}
-            </datalist>
-          </div>
+        <p class="session-location">Rzeka: <strong>${esc(getSessionLocation())}</strong></p>
+        <label class="length-label">Gatunek ryby</label>
+        <div class="species-toggle" role="group" aria-label="Gatunek ryby">
+          ${getSessionSpecies().map((species, idx) => `<button class="${!state.customSpecies && species === selectedSpecies() ? "active" : ""}" aria-pressed="${!state.customSpecies && species === selectedSpecies()}" onclick="App.selectSpecies(${idx})">${esc(species)}</button>`).join("")}
+          <button class="${state.customSpecies ? "active" : ""}" aria-pressed="${state.customSpecies}" onclick="App.selectOtherSpecies()">Inna</button>
         </div>
+        ${state.customSpecies ? `<label class="length-label" for="custom-species-input">Wpisz gatunek ryby</label>
+          <input class="text-input" id="custom-species-input" type="text" placeholder="np. brzana" value="${esc(state.customSpeciesInput)}" oninput="App.setCustomSpecies(this.value)" required />` : ""}
 
         <label class="length-label">Zdjęcie (opcjonalnie)</label>
         ${
@@ -1073,7 +1210,7 @@ function render() {
         <div class="add-row">
           <p class="points-preview">Punkty: <b>${pointsPreview}</b>${multiplierNote}</p>
           <button class="btn-add" ${!state.lengthInput || state.saving || state.uploadingPhoto ? "disabled" : ""} onclick="App.addCatch()">
-            ${state.uploadingPhoto ? "Wysyłanie zdjęcia…" : `${plusSvg()} Dodaj rybę`}
+            ${state.uploadingPhoto ? "Wysyłanie zdjęcia…" : state.editingCatchId ? "Zapisz zmiany ryby" : `${plusSvg()} Dodaj rybę`}
           </button>
         </div>
       </div>`
@@ -1081,7 +1218,7 @@ function render() {
 
       ${
         stats.todays.length > 0
-          ? `<p class="section-title">Wyjazd (${formatDatePL(d.currentSessionDate)})</p>
+          ? `<p class="section-title">Wyjazd (${formatDatePL(getWorkingDate())})</p>
              <div class="catch-list">
                ${stats.todays
                  .slice()
@@ -1112,6 +1249,7 @@ function render() {
                 <button class="lb-name lb-name-btn" onclick="App.openProfile(${idx})">${esc(name)}</button>
                 <p class="lb-points font-mono">${s.totalPoints.toFixed(1)}</p>
                 <p class="lb-sub">${s.count} ${plFish(s.count)} · najw. ${s.best || 0} cm</p>
+                ${s.bonusPoints ? `<p class="lb-sub">W tym bonusy za wyjazdy: +${s.bonusPoints.toFixed(1)} pkt</p>` : ""}
                 ${diffHtml}
               </div>`;
           })
@@ -1171,11 +1309,12 @@ function render() {
 
       ${
         stats.dates.length > 0
-          ? `<p class="section-title">Historia połowów</p>
+          ? `<p class="section-title">Historia wyjazdów i połowów</p>
              ${stats.dates
                .map((date) => {
-                 const list = stats.byDate[date];
-                 const sum = Math.round(list.reduce((s, c) => s + c.points, 0) * 10) / 10;
+                 const list = stats.byDate[date] || [];
+                 const bonuses = computeTripBonuses(list, (d.tripBonusRules || {})[date]);
+                 const sum = Math.round((list.reduce((s, c) => s + c.points, 0) + bonuses.reduce((sum, b) => sum + b.total, 0)) * 10) / 10;
                  const open = !!state.expandedDates[date];
                  return `
                    <div class="history-item">
@@ -1189,6 +1328,8 @@ function render() {
                      ${
                        open
                          ? `<div class="history-body">
+                             ${tripBonusHtml(date)}
+                             <button class="btn-secondary" onclick="App.editTrip('${date}')">Edytuj wyjazd / dodaj rybę</button>
                              ${list
                                .slice()
                                .sort((a, b) => (a.time < b.time ? 1 : -1))
@@ -1210,7 +1351,7 @@ function render() {
                .slice()
                .sort((a, b) => b.year - a.year)
                .map((season) => {
-                 const summary = computeSeasonTotals(season.anglerNames, season.catches, season.trips);
+                 const summary = computeSeasonTotals(season.anglerNames, season.catches, season.trips, season.tripBonusRules);
                  const open = !!state.expandedArchive[season.year];
                  const seasonByDate = {};
                  season.catches.forEach((c) => {
@@ -1347,7 +1488,7 @@ function render() {
               `
                   : state.showEndSeasonConfirm
                   ? (() => {
-                      const summary = computeSeasonTotals(d.anglerNames, d.catches, d.trips);
+                      const summary = computeSeasonTotals(d.anglerNames, d.catches, d.trips, d.tripBonusRules);
                       const totalFish = summary.perAngler[0].count + summary.perAngler[1].count;
                       return `
                 <div class="modal-head">
@@ -1631,8 +1772,23 @@ function xSvg() {
 
 // ---------- API wystawione do onclick ----------
 window.App = {
+  endTrip: guardedAction(endTrip),
+  editTrip: guardedAction(editTrip),
+  editCatch: guardedAction(editCatch),
+  closeTripEdit() {
+    resetCatchForm();
+    state.editingTripDate = null;
+    state.showDateEdit = false;
+    render();
+  },
   toggleAddForm() {
-    state.showAddForm = !state.showAddForm;
+    if ((!state.editingTripDate && !state.data.activeSessionDate) || !getSessionLocation()) {
+      state.showDateEdit = true;
+      state.dateDraft = state.editingTripDate || state.data.activeSessionDate || todayISO();
+      state.locationDraft = getSessionLocation(state.dateDraft);
+    } else {
+      state.showAddForm = !state.showAddForm;
+    }
     render();
   },
   selectAngler(idx) {
@@ -1645,12 +1801,22 @@ window.App = {
     const addBtn = document.querySelector(".btn-add");
     if (addBtn) addBtn.disabled = !v || state.saving;
   },
-  setSpecies(v) {
-    state.speciesInput = v;
-    refreshPointsPreviewDOM(); // wpływa na mnożnik, więc trzeba przeliczyć podgląd punktów
+  selectSpecies(idx) {
+    state.customSpecies = false;
+    state.speciesInput = getSessionSpecies()[idx] || "";
+    render();
   },
-  setLocation(v) {
-    state.locationInput = v;
+  selectOtherSpecies() {
+    state.customSpecies = true;
+    render();
+    const input = document.getElementById("custom-species-input");
+    if (input) input.focus();
+  },
+  setCustomSpecies(value) {
+    state.customSpeciesInput = value;
+    const input = document.getElementById("custom-species-input");
+    if (input) input.setCustomValidity("");
+    refreshPointsPreviewDOM();
   },
   addCatch: guardedAction(addCatch),
   deleteCatch: guardedAction(deleteCatch),
@@ -1746,15 +1912,33 @@ window.App = {
   },
   toggleDateEdit() {
     state.showDateEdit = !state.showDateEdit;
-    state.dateDraft = state.data.currentSessionDate;
+    state.dateDraft = state.editingTripDate || state.data.activeSessionDate || todayISO();
+    state.locationDraft = state.editingTripDate || state.data.activeSessionDate ? getSessionLocation() : "";
+    render();
+  },
+  setTripDate(date) {
+    const locationInput = document.getElementById("location-draft-input");
+    state.dateDraft = date;
+    state.locationDraft = getSessionLocation(date) || (locationInput ? locationInput.value : state.locationDraft);
     render();
   },
   confirmDate() {
     // odczytujemy wartość PRZED ewentualnym pokazaniem hasła, żeby jej nie zgubić
     const el = document.getElementById("date-draft-input");
     const val = el ? el.value : state.dateDraft;
+    const locationInput = document.getElementById("location-draft-input");
+    const location = locationInput ? locationInput.value.trim() : state.locationDraft.trim();
+    if (!val || !location) {
+      if (locationInput) {
+        locationInput.setCustomValidity("Wybierz lub wpisz rzekę.");
+        locationInput.reportValidity();
+        locationInput.oninput = () => locationInput.setCustomValidity("");
+      }
+      return;
+    }
     guardedAction(() => {
       state.dateDraft = val;
+      state.locationDraft = location;
       startNewSession();
     })();
   },

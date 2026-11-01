@@ -1082,3 +1082,21 @@ body {
   justify-content: center;
   cursor: pointer;
 }
+
+/* Wybór miejsca wyjazdu i gatunku połowu. */
+.date-edit { flex-wrap: wrap; }
+.date-edit input { min-width: 0; flex: 1 1 140px; }
+.species-toggle { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 8px; }
+.species-toggle button {
+  padding: 12px 14px; border: 2px solid var(--border); border-radius: 12px;
+  background: var(--surface); color: var(--text); font: inherit; cursor: pointer;
+}
+.species-toggle button.active { background: var(--brand); border-color: var(--brand); color: #fff; }
+.species-toggle button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.session-location { margin: 16px 0 0; color: var(--text); font-size: 14px; }
+
+.end-trip-btn { width: 100%; margin-bottom: 14px; padding: 12px; }
+.trip-edit-banner { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 10px; margin-bottom: 14px; color: #fff; }
+
+.trip-bonus-note { padding: 12px; margin: 12px 0; border: 1px solid var(--border); border-radius: 12px; color: var(--text); font-size: 13px; line-height: 1.5; }
+.trip-bonus-note p { margin: 6px 0 0; }
